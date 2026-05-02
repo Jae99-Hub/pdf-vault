@@ -1,0 +1,317 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import Sidebar from './components/Sidebar'
+import DocumentList from './components/DocumentList'
+import PdfViewer from './components/PdfViewer'
+import Settings from './components/Settings'
+import { Document, Folder, Tag } from './types'
+import './assets/main.css'
+
+function App(): React.ReactElement {
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [tags, setTags] = useState<Tag[]>([])
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null)
+  const [selectedFolderId, setSelectedFolderId] = useState<number | undefined>(undefined)
+  const [selectedTagIds, setSelectedTagIds] = useState<number[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [view, setView] = useState<'all' | 'favorites' | 'recent'>('all')
+  const [draggingDoc, setDraggingDoc] = useState<Document | null>(null)
+  const [reloadTrigger, setReloadTrigger] = useState(0)
+  const [isDroppingFile, setIsDroppingFile] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [isFirstTime, setIsFirstTime] = useState(false)
+  const dragCountRef = useRef(0)
+
+  const reload = useCallback(() => setReloadTrigger(t => t + 1), [])
+
+  useEffect(() => {
+    window.api.getFolders().then(setFolders)
+    window.api.getTags().then(setTags)
+    window.api.getVaultPath().then((p) => {
+      if (!p) { setIsFirstTime(true); setShowSettings(true) }
+    })
+    window.api.onMenuAction((action) => {
+      if (action === 'import') handleImport()
+      if (action === 'settings') { setIsFirstTime(false); setShowSettings(true) }
+    })
+  }, [])
+
+  useEffect(() => {
+    const resetDrag = () => {
+      dragCountRef.current = 0
+      setIsDroppingFile(false)
+    }
+    window.addEventListener('dragend', resetDrag)
+    window.addEventListener('drop', resetDrag)
+    return () => {
+      window.removeEventListener('dragend', resetDrag)
+      window.removeEventListener('drop', resetDrag)
+    }
+  }, [])
+
+  useEffect(() => {
+    async function load(): Promise<void> {
+      if (selectedTagIds.length > 0) {
+        const data = await window.api.getDocumentsByTags(selectedTagIds)
+        setDocuments(data)
+        return
+      }
+      const data = await window.api.getDocuments(selectedFolderId)
+      if (view === 'favorites') {
+        setDocuments(data.filter((d) => d.is_favorite === 1))
+      } else if (view === 'recent') {
+        const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+        setDocuments(data.filter(d => d.opened_at && new Date(d.opened_at) > cutoff))
+      } else {
+        setDocuments(data)
+      }
+    }
+    load()
+  }, [selectedFolderId, selectedTagIds, view, reloadTrigger])
+
+  async function handleImport(): Promise<void> {
+    await window.api.importPdf()
+    reload()
+  }
+
+  async function handleSearch(q: string): Promise<void> {
+    setSearchQuery(q)
+    if (q.trim() === '') {
+      reload()
+    } else {
+      const result = await window.api.searchDocuments(q)
+      setDocuments(result)
+    }
+  }
+
+  async function handleSelectDoc(doc: Document): Promise<void> {
+    setSelectedDoc(doc)
+    await window.api.updateOpened(doc.id)
+  }
+
+  async function handleCreateFolder(name: string, parentId?: number): Promise<void> {
+    await window.api.createFolder(name, parentId)
+    window.api.getFolders().then(setFolders)
+  }
+
+  async function handleCreateTag(name: string, color: string): Promise<void> {
+    await window.api.createTag(name, color)
+    window.api.getTags().then(setTags)
+  }
+
+  async function handleToggleFavorite(doc: Document): Promise<void> {
+    await window.api.toggleFavorite(doc.id)
+    reload()
+  }
+
+  async function handleMoveDocument(doc: Document, folderId: number | null): Promise<void> {
+    await window.api.moveDocument(doc.id, folderId)
+    reload()
+  }
+
+  async function handleDropToFolder(folderId: number | null): Promise<void> {
+    if (!draggingDoc) return
+    await window.api.moveDocument(draggingDoc.id, folderId)
+    setDraggingDoc(null)
+    reload()
+  }
+
+  async function handleDeleteDocument(doc: Document): Promise<void> {
+    await window.api.deleteDocument(doc.id)
+    if (selectedDoc?.id === doc.id) setSelectedDoc(null)
+    reload()
+  }
+
+  function handlePageCountUpdate(docId: number, pageCount: number): void {
+    setDocuments(docs => docs.map(d => d.id === docId ? { ...d, page_count: pageCount } : d))
+  }
+
+  async function handleRenameDocument(doc: Document, title: string): Promise<void> {
+    await window.api.renameDocument(doc.id, title)
+    reload()
+  }
+
+  async function handleBulkDelete(docs: Document[]): Promise<void> {
+    for (const doc of docs) {
+      await window.api.deleteDocument(doc.id)
+    }
+    if (docs.find(d => d.id === selectedDoc?.id)) setSelectedDoc(null)
+    reload()
+  }
+
+  async function handleBulkMove(docs: Document[], folderId: number | null): Promise<void> {
+    for (const doc of docs) {
+      await window.api.moveDocument(doc.id, folderId)
+    }
+    reload()
+  }
+
+  async function handleDeleteFolder(folderId: number): Promise<void> {
+    await window.api.deleteFolder(folderId)
+    if (selectedFolderId === folderId) setSelectedFolderId(undefined)
+    window.api.getFolders().then(setFolders)
+    reload()
+  }
+
+  async function handleRenameFolder(folderId: number, name: string): Promise<void> {
+    await window.api.renameFolder(folderId, name)
+    window.api.getFolders().then(setFolders)
+  }
+
+  async function handleDeleteTag(tagId: number): Promise<void> {
+    await window.api.deleteTag(tagId)
+    if (selectedTagId === tagId) setSelectedTagId(undefined)
+    window.api.getTags().then(setTags)
+    reload()
+  }
+
+  async function handleRenameTag(tagId: number, name: string): Promise<void> {
+    await window.api.renameTag(tagId, name)
+    window.api.getTags().then(setTags)
+  }
+
+  function handleWindowDragEnter(e: React.DragEvent): void {
+    if (draggingDoc) return
+    const hasFiles = Array.from(e.dataTransfer.types).includes('Files')
+    if (!hasFiles) return
+    e.preventDefault()
+    dragCountRef.current++
+    setIsDroppingFile(true)
+  }
+
+  function handleWindowDragOver(e: React.DragEvent): void {
+    if (draggingDoc) return
+    const hasFiles = Array.from(e.dataTransfer.types).includes('Files')
+    if (!hasFiles) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function handleWindowDragLeave(): void {
+    if (draggingDoc) return
+    dragCountRef.current--
+    if (dragCountRef.current <= 0) {
+      dragCountRef.current = 0
+      setIsDroppingFile(false)
+    }
+  }
+
+  async function handleWindowDrop(e: React.DragEvent): Promise<void> {
+    if (draggingDoc) return
+    e.preventDefault()
+    dragCountRef.current = 0
+    setIsDroppingFile(false)
+    const files: string[] = []
+    for (let i = 0; i < e.dataTransfer.files.length; i++) {
+      const f = e.dataTransfer.files[i]
+      if (f.name.toLowerCase().endsWith('.pdf')) {
+        const filePath = window.api.getPathForFile(f)
+        if (filePath) files.push(filePath)
+      }
+    }
+    if (files.length === 0) return
+    await window.api.importPdfPaths(files, selectedFolderId ?? null)
+    reload()
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex', width: '100vw', height: '100vh',
+        fontFamily: 'Segoe UI, sans-serif', fontSize: '13px',
+        background: '#16161a', color: '#e2e2e8', overflow: 'hidden',
+        position: 'fixed', top: 0, left: 0
+      }}
+      onDragEnter={handleWindowDragEnter}
+      onDragOver={handleWindowDragOver}
+      onDragLeave={handleWindowDragLeave}
+      onDrop={handleWindowDrop}
+    >
+      <Sidebar
+        folders={folders}
+        tags={tags}
+        selectedFolderId={selectedFolderId}
+        selectedTagIds={selectedTagIds}
+        view={view}
+        onSelectFolder={(id) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all') }}
+        onSelectTag={(id) => {
+          setSelectedTagIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
+          setSelectedFolderId(undefined)
+          setView('all')
+        }}
+        onSelectView={(v) => { setView(v); setSelectedFolderId(undefined); setSelectedTagIds([]) }}
+        onCreateFolder={handleCreateFolder}
+        onCreateTag={handleCreateTag}
+        onImport={handleImport}
+        searchQuery={searchQuery}
+        onSearch={handleSearch}
+        draggingDoc={draggingDoc}
+        onDropToFolder={handleDropToFolder}
+        onDeleteFolder={handleDeleteFolder}
+        onRenameFolder={handleRenameFolder}
+        onDeleteTag={handleDeleteTag}
+        onRenameTag={handleRenameTag}
+        onDropFileToFolder={async (folderId, files) => {
+          await window.api.importPdfPaths(files, folderId)
+          reload()
+        }}
+        onOpenSettings={() => { setIsFirstTime(false); setShowSettings(true) }}
+      />
+      <DocumentList
+        documents={documents}
+        folders={folders}
+        tags={tags}
+        selectedDoc={selectedDoc}
+        onSelectDoc={handleSelectDoc}
+        onToggleFavorite={handleToggleFavorite}
+        onMoveDocument={handleMoveDocument}
+        onDragStart={(doc) => setDraggingDoc(doc)}
+        onDeleteDocument={handleDeleteDocument}
+        onRenameDocument={handleRenameDocument}
+        onBulkDelete={handleBulkDelete}
+        onBulkMove={handleBulkMove}
+      />
+      <PdfViewer document={selectedDoc} onPageCountUpdate={handlePageCountUpdate} />
+
+      {showSettings && (
+        <Settings
+          isFirstTime={isFirstTime}
+          onClose={() => { setShowSettings(false); setIsFirstTime(false) }}
+        />
+      )}
+
+      {isDroppingFile && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 99999,
+          background: 'rgba(77, 148, 232, 0.1)',
+          border: '2px dashed #4d94e8',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+          backdropFilter: 'blur(2px)'
+        }}>
+          <div style={{
+            background: '#1e1e24', borderRadius: 14, padding: '28px 48px',
+            border: '1px solid #4d94e8',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            textAlign: 'center'
+          }}>
+            <div style={{
+              width: 52, height: 52, borderRadius: 12,
+              background: '#1a3560', border: '1px solid #4d94e8',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 24, margin: '0 auto 14px'
+            }}>📄</div>
+            <div style={{ fontSize: 14, color: '#7cb8e8', fontWeight: 600, marginBottom: 4 }}>
+              {selectedFolderId
+                ? `${folders.find(f => f.id === selectedFolderId)?.name} 에 추가`
+                : '전체 문서에 추가'}
+            </div>
+            <div style={{ fontSize: 11, color: '#4a4a5a' }}>PDF 파일을 놓으세요</div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default App

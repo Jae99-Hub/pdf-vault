@@ -1,0 +1,813 @@
+import { app, shell, BrowserWindow, ipcMain, dialog, Menu, MenuItem } from 'electron'
+import { autoUpdater } from 'electron-updater'
+import { join, basename, dirname, sep } from 'path'
+import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import Database from 'better-sqlite3'
+import fs from 'fs'
+
+const DB_PATH = join(app.getPath('userData'), 'pdf-vault.db')
+const SETTINGS_PATH = join(app.getPath('userData'), 'settings.json')
+let db: Database.Database
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+interface Settings {
+  vaultPath?: string
+}
+
+let settings: Settings = {}
+
+function loadSettings(): Settings {
+  try {
+    if (fs.existsSync(SETTINGS_PATH)) {
+      return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'))
+    }
+  } catch (e) {
+    console.error('settings load error:', e)
+  }
+  return {}
+}
+
+function saveSettings(s: Settings): void {
+  fs.writeFileSync(SETTINGS_PATH, JSON.stringify(s, null, 2), 'utf-8')
+}
+
+// ── File system helpers ───────────────────────────────────────────────────────
+
+// Recursively copy a directory tree (no fs.cpSync dependency)
+function copyDirSync(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true })
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = join(src, entry.name)
+    const destPath = join(dest, entry.name)
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, destPath)
+    } else {
+      fs.copyFileSync(srcPath, destPath)
+    }
+  }
+}
+
+// ── Vault helpers ─────────────────────────────────────────────────────────────
+
+// Strip characters that are illegal in Windows/macOS/Linux file names
+function sanitizeName(name: string): string {
+  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || 'untitled'
+}
+
+// Build the relative path (from vault root) for a folder using its DB ancestry
+function getFolderRelPath(folderId: number): string {
+  const parts: string[] = []
+  let cur: number | null = folderId
+  while (cur) {
+    const row = db
+      .prepare('SELECT id, name, parent_id FROM folders WHERE id = ?')
+      .get(cur) as { id: number; name: string; parent_id: number | null } | undefined
+    if (!row) break
+    parts.unshift(sanitizeName(row.name))
+    cur = row.parent_id
+  }
+  return parts.join(sep)
+}
+
+// Ensure the vault directory for folderId (or vault root if null) exists
+function ensureVaultDir(folderId: number | null): string | null {
+  if (!settings.vaultPath) return null
+  const rel = folderId ? getFolderRelPath(folderId) : ''
+  const dir = rel ? join(settings.vaultPath, rel) : settings.vaultPath
+  fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+// Resolve a unique destination path in dir for a given base name (no ext)
+function uniquePath(dir: string, title: string, avoid?: string): string {
+  const safe = sanitizeName(title)
+  let dest = join(dir, `${safe}.pdf`)
+  let i = 1
+  while (fs.existsSync(dest) && dest !== avoid) {
+    dest = join(dir, `${safe} (${i}).pdf`)
+    i++
+  }
+  return dest
+}
+
+// Copy srcPath into the vault at folderId; returns new vault path or null
+function copyToVault(srcPath: string, title: string, folderId: number | null): string | null {
+  const dir = ensureVaultDir(folderId)
+  if (!dir) return null
+  const dest = uniquePath(dir, title, srcPath)
+  if (dest !== srcPath) fs.copyFileSync(srcPath, dest)
+  return dest
+}
+
+// Recursively collect all document rows ({id, file_path}) under folderId
+function collectDocsInSubtree(folderId: number): { id: number; file_path: string }[] {
+  const docs = db
+    .prepare('SELECT id, file_path FROM documents WHERE folder_id = ?')
+    .all(folderId) as { id: number; file_path: string }[]
+  const subs = db
+    .prepare('SELECT id FROM folders WHERE parent_id = ?')
+    .all(folderId) as { id: number }[]
+  for (const s of subs) docs.push(...collectDocsInSubtree(s.id))
+  return docs
+}
+
+// ── Database ──────────────────────────────────────────────────────────────────
+
+function initDatabase(): void {
+  db = new Database(DB_PATH)
+  db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS folders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      parent_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      file_path TEXT NOT NULL UNIQUE,
+      folder_id INTEGER,
+      page_count INTEGER DEFAULT 0,
+      file_size INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      opened_at TEXT,
+      is_favorite INTEGER DEFAULT 0,
+      FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT DEFAULT '#378ADD'
+    );
+
+    CREATE TABLE IF NOT EXISTS document_tags (
+      document_id INTEGER,
+      tag_id INTEGER,
+      PRIMARY KEY (document_id, tag_id),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+      FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS highlights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL,
+      page INTEGER NOT NULL,
+      x REAL, y REAL, width REAL, height REAL,
+      color TEXT DEFAULT '#FAEEDA',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS memos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL,
+      page INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+      title, content, document_id UNINDEXED
+    );
+
+    CREATE TABLE IF NOT EXISTS text_highlights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL,
+      page INTEGER NOT NULL,
+      rects TEXT NOT NULL,
+      selected_text TEXT DEFAULT '',
+      color TEXT DEFAULT '#ffe066',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+  `)
+}
+
+// ── Window ────────────────────────────────────────────────────────────────────
+
+function createWindow(): void {
+  const mainWindow = new BrowserWindow({
+    show: false,
+    backgroundColor: '#1e1e1e',
+    titleBarStyle: 'default',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      webSecurity: false
+    }
+  })
+
+  mainWindow.maximize()
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow.show()
+    setupAutoUpdater(mainWindow)
+  })
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+// ── IPC handlers ──────────────────────────────────────────────────────────────
+
+function registerIpcHandlers(): void {
+
+  // ── Vault settings ──────────────────────────────────────────────────────────
+
+  ipcMain.handle('get-vault-path', () => settings.vaultPath ?? null)
+
+  ipcMain.handle('set-vault-path', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '보관 폴더 선택',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const newVaultPath = result.filePaths[0]
+    const oldVaultPath = settings.vaultPath
+
+    // 기존 vault가 있고 새 경로가 다를 때 → 파일/폴더 통째 이동
+    const shouldMigrate =
+      !!oldVaultPath &&
+      oldVaultPath !== newVaultPath &&
+      !newVaultPath.startsWith(oldVaultPath + sep) &&
+      fs.existsSync(oldVaultPath)
+
+    if (shouldMigrate && oldVaultPath) {
+      // 1) 새 위치로 전체 복사
+      copyDirSync(oldVaultPath, newVaultPath)
+
+      // 2) DB file_path 접두사 일괄 교체
+      const oldPrefix = oldVaultPath + sep
+      const newPrefix = newVaultPath + sep
+      const docs = db.prepare('SELECT id, file_path FROM documents').all() as {
+        id: number; file_path: string
+      }[]
+      const upd = db.prepare('UPDATE documents SET file_path = ? WHERE id = ?')
+      for (const doc of docs) {
+        if (doc.file_path.startsWith(oldPrefix)) {
+          upd.run(newPrefix + doc.file_path.slice(oldPrefix.length), doc.id)
+        }
+      }
+
+      // 3) 기존 vault 삭제
+      fs.rmSync(oldVaultPath, { recursive: true, force: true })
+    }
+
+    settings.vaultPath = newVaultPath
+    saveSettings(settings)
+    fs.mkdirSync(newVaultPath, { recursive: true })
+    return newVaultPath
+  })
+
+  // 탐색기에서 파일 위치 열기
+  ipcMain.handle('show-item-in-folder', (_e, filePath: string) => {
+    // 파일이 존재하면 선택 상태로, 없으면 부모 폴더라도 열기
+    if (fs.existsSync(filePath)) {
+      shell.showItemInFolder(filePath)
+    } else {
+      const parent = dirname(filePath)
+      if (fs.existsSync(parent)) {
+        shell.openPath(parent)
+      }
+    }
+  })
+
+  // ── Import PDF (dialog) ─────────────────────────────────────────────────────
+
+  ipcMain.handle('import-pdf', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    })
+    if (result.canceled) return []
+
+    const imported: object[] = []
+    for (const srcPath of result.filePaths) {
+      try {
+        const stat = fs.statSync(srcPath)
+        const title = basename(srcPath, '.pdf')
+        const storedPath = settings.vaultPath
+          ? (copyToVault(srcPath, title, null) ?? srcPath)
+          : srcPath
+        const stmt = db.prepare(
+          'INSERT OR IGNORE INTO documents (title, file_path, file_size) VALUES (?, ?, ?)'
+        )
+        const info = stmt.run(title, storedPath, stat.size)
+        imported.push({ id: info.lastInsertRowid, title, filePath: storedPath })
+      } catch (e) {
+        console.error(e)
+      }
+    }
+    return imported
+  })
+
+  // ── Import PDF (paths, e.g. drag-drop) ─────────────────────────────────────
+
+  ipcMain.handle('import-pdf-paths', async (_e, filePaths: string[], folderId?: number | null) => {
+    const imported: object[] = []
+    for (const srcPath of filePaths) {
+      if (!srcPath.toLowerCase().endsWith('.pdf')) continue
+      try {
+        const stat = fs.statSync(srcPath)
+        const title = basename(srcPath, '.pdf')
+        const storedPath = settings.vaultPath
+          ? (copyToVault(srcPath, title, folderId ?? null) ?? srcPath)
+          : srcPath
+        const stmt = db.prepare(
+          'INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)'
+        )
+        const info = stmt.run(title, storedPath, stat.size, folderId ?? null)
+        imported.push({ id: info.lastInsertRowid, title, filePath: storedPath })
+      } catch (e) {
+        console.error(e)
+      }
+    }
+    return imported
+  })
+
+  // ── Documents ───────────────────────────────────────────────────────────────
+
+  ipcMain.handle('get-documents', (_e, folderId?: number) => {
+    if (folderId) {
+      return db
+        .prepare('SELECT * FROM documents WHERE folder_id = ? ORDER BY opened_at DESC, created_at DESC')
+        .all(folderId)
+    }
+    return db.prepare('SELECT * FROM documents ORDER BY opened_at DESC, created_at DESC').all()
+  })
+
+  ipcMain.handle('search-documents', (_e, query: string) => {
+    const titleMatches = db
+      .prepare('SELECT * FROM documents WHERE title LIKE ? ORDER BY opened_at DESC')
+      .all(`%${query}%`) as { id: number }[]
+    try {
+      // 영문·숫자·한글만 남기고 나머지는 공백으로 치환 (FTS5 특수문자 오류 방지)
+      const ftsQuery = query.replace(/[^a-zA-Z0-9가-힣\s]/g, ' ').trim()
+        .split(/\s+/).filter(Boolean).map(w => `${w}*`).join(' ')
+      if (!ftsQuery) return titleMatches
+      const contentMatches = db.prepare(`
+        SELECT d.* FROM documents d
+        INNER JOIN documents_fts fts ON d.id = fts.document_id
+        WHERE documents_fts MATCH ?
+        ORDER BY d.opened_at DESC
+      `).all(ftsQuery) as { id: number }[]
+      const seen = new Set(titleMatches.map(d => d.id))
+      const merged = [...titleMatches]
+      for (const doc of contentMatches) {
+        if (!seen.has(doc.id)) { seen.add(doc.id); merged.push(doc) }
+      }
+      return merged
+    } catch (e) {
+      console.error('FTS search error:', e)
+      return titleMatches
+    }
+  })
+
+  ipcMain.handle('update-opened', (_e, documentId: number) => {
+    db.prepare("UPDATE documents SET opened_at = datetime('now') WHERE id = ?").run(documentId)
+  })
+
+  ipcMain.handle('toggle-favorite', (_e, documentId: number) => {
+    db.prepare('UPDATE documents SET is_favorite = NOT is_favorite WHERE id = ?').run(documentId)
+  })
+
+  ipcMain.handle('rename-document', (_e, documentId: number, title: string) => {
+    if (settings.vaultPath) {
+      const doc = db
+        .prepare('SELECT id, file_path, folder_id FROM documents WHERE id = ?')
+        .get(documentId) as { id: number; file_path: string; folder_id: number | null } | undefined
+      if (doc && doc.file_path.startsWith(settings.vaultPath)) {
+        try {
+          const dir = dirname(doc.file_path)
+          const dest = uniquePath(dir, title, doc.file_path)
+          if (fs.existsSync(doc.file_path)) fs.renameSync(doc.file_path, dest)
+          db.prepare('UPDATE documents SET title = ?, file_path = ? WHERE id = ?').run(
+            title, dest, documentId
+          )
+          return
+        } catch (e) {
+          console.error('rename-document file error:', e)
+        }
+      }
+    }
+    db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(title, documentId)
+  })
+
+  ipcMain.handle('move-document', (_e, documentId: number, folderId: number | null) => {
+    if (settings.vaultPath) {
+      const doc = db
+        .prepare('SELECT id, file_path, title FROM documents WHERE id = ?')
+        .get(documentId) as { id: number; file_path: string; title: string } | undefined
+      if (doc && doc.file_path.startsWith(settings.vaultPath)) {
+        try {
+          const dir = ensureVaultDir(folderId)
+          if (dir) {
+            const dest = uniquePath(dir, doc.title, doc.file_path)
+            if (fs.existsSync(doc.file_path) && doc.file_path !== dest) {
+              fs.renameSync(doc.file_path, dest)
+            }
+            db.prepare('UPDATE documents SET folder_id = ?, file_path = ? WHERE id = ?').run(
+              folderId, dest, documentId
+            )
+            return
+          }
+        } catch (e) {
+          console.error('move-document file error:', e)
+        }
+      }
+    }
+    db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folderId, documentId)
+  })
+
+  ipcMain.handle('delete-document', (_e, documentId: number) => {
+    if (settings.vaultPath) {
+      const doc = db
+        .prepare('SELECT id, file_path FROM documents WHERE id = ?')
+        .get(documentId) as { id: number; file_path: string } | undefined
+      if (doc && doc.file_path.startsWith(settings.vaultPath)) {
+        try {
+          if (fs.existsSync(doc.file_path)) fs.unlinkSync(doc.file_path)
+        } catch (e) {
+          console.error('delete-document file error:', e)
+        }
+      }
+    }
+    db.prepare('DELETE FROM documents WHERE id = ?').run(documentId)
+  })
+
+  ipcMain.handle('get-document-tags', (_e, documentId: number) => {
+    return db
+      .prepare('SELECT t.* FROM tags t JOIN document_tags dt ON t.id = dt.tag_id WHERE dt.document_id = ?')
+      .all(documentId)
+  })
+
+  ipcMain.handle('add-document-tag', (_e, documentId: number, tagId: number) => {
+    db.prepare('INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)').run(documentId, tagId)
+  })
+
+  ipcMain.handle('remove-document-tag', (_e, documentId: number, tagId: number) => {
+    db.prepare('DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?').run(documentId, tagId)
+  })
+
+  ipcMain.handle('get-documents-by-tags', (_e, tagIds: number[]) => {
+    if (!tagIds.length) return []
+    const placeholders = tagIds.map(() => '?').join(',')
+    return db.prepare(`
+      SELECT DISTINCT d.* FROM documents d
+      JOIN document_tags dt ON d.id = dt.document_id
+      WHERE dt.tag_id IN (${placeholders})
+      ORDER BY d.opened_at DESC, d.created_at DESC
+    `).all(...tagIds)
+  })
+
+  ipcMain.handle('get-documents-by-tag', (_e, tagId: number) => {
+    return db
+      .prepare(`SELECT d.* FROM documents d
+        JOIN document_tags dt ON d.id = dt.document_id
+        WHERE dt.tag_id = ?
+        ORDER BY d.opened_at DESC, d.created_at DESC`)
+      .all(tagId)
+  })
+
+  ipcMain.handle('update-page-count', (_e, documentId: number, pageCount: number) => {
+    db.prepare('UPDATE documents SET page_count = ? WHERE id = ?').run(pageCount, documentId)
+  })
+
+  ipcMain.handle('index-pdf-content', (_e, documentId: number, content: string) => {
+    const row = db.prepare('SELECT title FROM documents WHERE id = ?').get(documentId) as { title: string } | undefined
+    if (!row) return
+    db.prepare('INSERT OR REPLACE INTO documents_fts (document_id, title, content) VALUES (?, ?, ?)').run(documentId, row.title, content)
+  })
+
+  ipcMain.handle('get-text-highlights', (_e, documentId: number) => {
+    return db.prepare('SELECT * FROM text_highlights WHERE document_id = ? ORDER BY page, created_at').all(documentId)
+  })
+
+  ipcMain.handle('add-text-highlight', (_e, documentId: number, page: number, rects: string, selectedText: string, color: string) => {
+    const info = db.prepare(
+      'INSERT INTO text_highlights (document_id, page, rects, selected_text, color) VALUES (?, ?, ?, ?, ?)'
+    ).run(documentId, page, rects, selectedText, color)
+    return { id: info.lastInsertRowid, document_id: documentId, page, rects, selected_text: selectedText, color }
+  })
+
+  ipcMain.handle('delete-text-highlight', (_e, highlightId: number) => {
+    db.prepare('DELETE FROM text_highlights WHERE id = ?').run(highlightId)
+  })
+
+  ipcMain.handle('read-pdf-buffer', (_e, filePath: string) => {
+    return fs.readFileSync(filePath)
+  })
+
+  // ── Folders ─────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('get-folders', () => {
+    return db.prepare('SELECT * FROM folders ORDER BY name').all()
+  })
+
+  ipcMain.handle('create-folder', (_e, name: string, parentId?: number) => {
+    const stmt = db.prepare('INSERT INTO folders (name, parent_id) VALUES (?, ?)')
+    const info = stmt.run(name, parentId ?? null)
+    const folderId = info.lastInsertRowid as number
+
+    if (settings.vaultPath) {
+      try {
+        ensureVaultDir(folderId)
+      } catch (e) {
+        console.error('create-folder dir error:', e)
+      }
+    }
+    return { id: folderId, name, parent_id: parentId ?? null }
+  })
+
+  ipcMain.handle('rename-folder', (_e, folderId: number, name: string) => {
+    if (settings.vaultPath) {
+      try {
+        const oldRel = getFolderRelPath(folderId)
+        const oldAbs = join(settings.vaultPath, oldRel)
+
+        db.prepare('UPDATE folders SET name = ? WHERE id = ?').run(name, folderId)
+
+        const newRel = getFolderRelPath(folderId)
+        const newAbs = join(settings.vaultPath, newRel)
+
+        if (fs.existsSync(oldAbs)) fs.renameSync(oldAbs, newAbs)
+
+        // Update file_path for all documents that lived inside this folder tree
+        const prefix = oldAbs + sep
+        const docs = db.prepare('SELECT id, file_path FROM documents').all() as {
+          id: number; file_path: string
+        }[]
+        const upd = db.prepare('UPDATE documents SET file_path = ? WHERE id = ?')
+        for (const doc of docs) {
+          if (doc.file_path.startsWith(prefix)) {
+            upd.run(newAbs + sep + doc.file_path.slice(prefix.length), doc.id)
+          }
+        }
+        return
+      } catch (e) {
+        console.error('rename-folder error:', e)
+      }
+    }
+    db.prepare('UPDATE folders SET name = ? WHERE id = ?').run(name, folderId)
+  })
+
+  ipcMain.handle('delete-folder', (_e, folderId: number) => {
+    if (settings.vaultPath) {
+      try {
+        const folderAbs = join(settings.vaultPath, getFolderRelPath(folderId))
+        const docs = collectDocsInSubtree(folderId)
+        const upd = db.prepare('UPDATE documents SET file_path = ? WHERE id = ?')
+
+        // Move every PDF in the subtree back to vault root
+        for (const doc of docs) {
+          if (doc.file_path.startsWith(settings.vaultPath) && fs.existsSync(doc.file_path)) {
+            const dest = uniquePath(settings.vaultPath, basename(doc.file_path, '.pdf'), doc.file_path)
+            if (doc.file_path !== dest) fs.renameSync(doc.file_path, dest)
+            upd.run(dest, doc.id)
+          }
+        }
+
+        // Remove the now-empty folder tree
+        if (fs.existsSync(folderAbs)) fs.rmSync(folderAbs, { recursive: true })
+      } catch (e) {
+        console.error('delete-folder error:', e)
+      }
+    }
+    db.prepare('DELETE FROM folders WHERE id = ?').run(folderId)
+  })
+
+  // ── Tags ─────────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('get-tags', () => {
+    return db.prepare('SELECT * FROM tags ORDER BY name').all()
+  })
+
+  ipcMain.handle('create-tag', (_e, name: string, color: string) => {
+    const stmt = db.prepare('INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)')
+    const info = stmt.run(name, color)
+    return { id: info.lastInsertRowid, name, color }
+  })
+
+  ipcMain.handle('delete-tag', (_e, tagId: number) => {
+    db.prepare('DELETE FROM tags WHERE id = ?').run(tagId)
+  })
+
+  ipcMain.handle('rename-tag', (_e, tagId: number, name: string) => {
+    db.prepare('UPDATE tags SET name = ? WHERE id = ?').run(name, tagId)
+  })
+
+  // ── Memos ────────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('add-memo', (_e, documentId: number, page: number, content: string) => {
+    const stmt = db.prepare('INSERT INTO memos (document_id, page, content) VALUES (?, ?, ?)')
+    const info = stmt.run(documentId, page, content)
+    return { id: info.lastInsertRowid, document_id: documentId, page, content }
+  })
+
+  ipcMain.handle('get-memos', (_e, documentId: number) => {
+    return db.prepare('SELECT * FROM memos WHERE document_id = ? ORDER BY page').all(documentId)
+  })
+
+  ipcMain.handle('delete-memo', (_e, memoId: number) => {
+    db.prepare('DELETE FROM memos WHERE id = ?').run(memoId)
+  })
+}
+
+// ── Auto updater ─────────────────────────────────────────────────────────────
+
+function setupAutoUpdater(win: BrowserWindow): void {
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => {
+    win.webContents.send('update-status', { type: 'checking' })
+  })
+  autoUpdater.on('update-available', (info) => {
+    win.webContents.send('update-status', { type: 'available', version: info.version })
+  })
+  autoUpdater.on('update-not-available', () => {
+    win.webContents.send('update-status', { type: 'not-available' })
+  })
+  autoUpdater.on('download-progress', (progress) => {
+    win.webContents.send('update-status', { type: 'downloading', percent: Math.round(progress.percent) })
+  })
+  autoUpdater.on('update-downloaded', () => {
+    win.webContents.send('update-status', { type: 'downloaded' })
+  })
+  autoUpdater.on('error', (err) => {
+    win.webContents.send('update-status', { type: 'error', message: err.message })
+  })
+
+  ipcMain.handle('check-for-updates', () => {
+    if (is.dev) {
+      win.webContents.send('update-status', { type: 'not-available' })
+      return
+    }
+    autoUpdater.checkForUpdates()
+  })
+
+  ipcMain.handle('download-update', () => {
+    autoUpdater.downloadUpdate()
+  })
+
+  ipcMain.handle('install-update', () => {
+    autoUpdater.quitAndInstall()
+  })
+}
+
+// ── Application menu (Korean) ─────────────────────────────────────────────────
+
+function buildMenu(): void {
+  const isMac = process.platform === 'darwin'
+
+  const template: (Electron.MenuItemConstructorOptions | MenuItem)[] = [
+    // macOS: 앱 이름 메뉴
+    ...(isMac ? [{
+      label: app.getName(),
+      submenu: [
+        { label: `${app.getName()} 정보`, role: 'about' as const },
+        { type: 'separator' as const },
+        { label: '서비스', role: 'services' as const },
+        { type: 'separator' as const },
+        { label: `${app.getName()} 숨기기`, role: 'hide' as const },
+        { label: '다른 앱 숨기기', role: 'hideOthers' as const },
+        { label: '모두 보이기', role: 'unhide' as const },
+        { type: 'separator' as const },
+        { label: '종료', role: 'quit' as const }
+      ]
+    }] : []),
+
+    // 파일
+    {
+      label: '파일',
+      submenu: [
+        {
+          label: 'PDF 가져오기...',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('menu-import')
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '설정',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('menu-settings')
+          }
+        },
+        { type: 'separator' },
+        isMac
+          ? { label: '닫기', role: 'close' as const }
+          : { label: '종료', role: 'quit' as const }
+      ]
+    },
+
+    // 편집
+    {
+      label: '편집',
+      submenu: [
+        { label: '실행 취소', role: 'undo' as const },
+        { label: '다시 실행', role: 'redo' as const },
+        { type: 'separator' },
+        { label: '잘라내기', role: 'cut' as const },
+        { label: '복사', role: 'copy' as const },
+        { label: '붙여넣기', role: 'paste' as const },
+        { label: '전체 선택', role: 'selectAll' as const }
+      ]
+    },
+
+    // 보기
+    {
+      label: '보기',
+      submenu: [
+        { label: '새로 고침', role: 'reload' as const },
+        { label: '강제 새로 고침', role: 'forceReload' as const },
+        { label: '개발자 도구', role: 'toggleDevTools' as const },
+        { type: 'separator' },
+        { label: '실제 크기', role: 'resetZoom' as const },
+        { label: '확대', role: 'zoomIn' as const },
+        { label: '축소', role: 'zoomOut' as const },
+        { type: 'separator' },
+        { label: '전체 화면', role: 'togglefullscreen' as const }
+      ]
+    },
+
+    // 창
+    {
+      label: '창',
+      submenu: [
+        { label: '최소화', role: 'minimize' as const },
+        { label: '최대화 / 복원', click: () => {
+          const win = BrowserWindow.getFocusedWindow()
+          if (!win) return
+          win.isMaximized() ? win.unmaximize() : win.maximize()
+        }},
+        { type: 'separator' },
+        { label: '맨 앞으로 가져오기', role: 'front' as const }
+      ]
+    },
+
+    // 도움말
+    {
+      label: '도움말',
+      submenu: [
+        {
+          label: 'PDF Vault 정보',
+          click: () => {
+            dialog.showMessageBox({
+              type: 'info',
+              title: 'PDF Vault 정보',
+              message: 'PDF Vault',
+              detail: `버전: ${app.getVersion()}\nElectron: ${process.versions.electron}\nNode: ${process.versions.node}`
+            })
+          }
+        }
+      ]
+    }
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+// ── App lifecycle ─────────────────────────────────────────────────────────────
+
+app.whenReady().then(() => {
+  electronApp.setAppUserModelId('com.pdfvault')
+  app.on('browser-window-created', (_, window) => {
+    optimizer.watchWindowShortcuts(window)
+  })
+
+  settings = loadSettings()
+  initDatabase()
+  registerIpcHandlers()
+  buildMenu()
+  createWindow()
+
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    db?.close()
+    app.quit()
+  }
+})
