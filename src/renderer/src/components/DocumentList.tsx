@@ -16,6 +16,7 @@ interface Props {
   folders: Folder[]
   tags: Tag[]
   selectedDoc: Document | null
+  selectedFileType: string | null
   onSelectDoc: (doc: Document) => void
   onToggleFavorite: (doc: Document) => void
   onMoveDocument: (doc: Document, folderId: number | null) => void
@@ -24,6 +25,14 @@ interface Props {
   onRenameDocument: (doc: Document, title: string) => void
   onBulkDelete: (docs: Document[]) => void
   onBulkMove: (docs: Document[], folderId: number | null) => void
+}
+
+const FILE_TYPE_PATTERNS: Record<string, RegExp> = {
+  pdf: /\.pdf$/i,
+  image: /\.(jpg|jpeg|png|gif|bmp|webp)$/i,
+  video: /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i,
+  audio: /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i,
+  doc: /\.(txt|md|docx|hwp)$/i,
 }
 
 
@@ -49,7 +58,7 @@ function getFolderName(doc: Document, folders: Folder[]): string | null {
 }
 
 export default function DocumentList({
-  documents, folders, tags, selectedDoc,
+  documents, folders, tags, selectedDoc, selectedFileType,
   onSelectDoc, onToggleFavorite, onMoveDocument,
   onDragStart, onDeleteDocument, onRenameDocument,
   onBulkDelete, onBulkMove
@@ -134,8 +143,12 @@ export default function DocumentList({
     setSelectedIds(new Set()); setSelectMode(false); setShowBulkMoveMenu(false)
   }
 
+  const filteredDocuments = selectedFileType && FILE_TYPE_PATTERNS[selectedFileType]
+    ? documents.filter(d => FILE_TYPE_PATTERNS[selectedFileType!].test(d.file_path))
+    : documents
+
   function sortedDocs(): Document[] {
-    const arr = [...documents]
+    const arr = [...filteredDocuments]
     switch (sortBy) {
       case 'title': return arr.sort((a, b) => a.title.localeCompare(b.title, 'ko'))
       case 'created': return arr.sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -154,7 +167,7 @@ export default function DocumentList({
     >
       {/* 헤더 */}
       <div style={{ padding: '10px 12px 8px', borderBottom: `1px solid ${C.border}`, background: C.surface, display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-        <span style={{ fontSize: 11, color: C.muted, flex: 1, fontWeight: 500 }}>문서 <span style={{ color: C.accent }}>{documents.length}</span>개</span>
+        <span style={{ fontSize: 11, color: C.muted, flex: 1, fontWeight: 500 }}>문서 <span style={{ color: C.accent }}>{filteredDocuments.length}</span>개</span>
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
@@ -182,13 +195,13 @@ export default function DocumentList({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              const allIds = new Set(documents.map(d => d.id))
-              const allSelected = documents.every(d => selectedIds.has(d.id))
+              const allIds = new Set(filteredDocuments.map(d => d.id))
+              const allSelected = filteredDocuments.every(d => selectedIds.has(d.id))
               setSelectedIds(allSelected ? new Set() : allIds)
             }}
-            style={{ padding: '3px 9px', fontSize: 10, background: documents.every(d => selectedIds.has(d.id)) ? C.active : 'transparent', border: `1px solid ${C.accent}`, borderRadius: 5, color: C.accent, cursor: 'pointer', transition: 'all 0.12s' }}
+            style={{ padding: '3px 9px', fontSize: 10, background: filteredDocuments.every(d => selectedIds.has(d.id)) ? C.active : 'transparent', border: `1px solid ${C.accent}`, borderRadius: 5, color: C.accent, cursor: 'pointer', transition: 'all 0.12s' }}
           >
-            {documents.every(d => selectedIds.has(d.id)) ? '전체 해제' : '전체 선택'}
+            {filteredDocuments.every(d => selectedIds.has(d.id)) ? '전체 해제' : '전체 선택'}
           </button>
 
       {selectedIds.size > 0 && (<>
@@ -218,11 +231,11 @@ export default function DocumentList({
 
       {/* 문서 목록 */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
-        {documents.length === 0 && (
+        {filteredDocuments.length === 0 && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted }}>
             <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.4 }}>📄</div>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>문서가 없습니다</div>
-            <div style={{ fontSize: 11, opacity: 0.7 }}>PDF 또는 이미지를 드래그하거나 추가 버튼을 눌러주세요</div>
+            <div style={{ fontSize: 11, opacity: 0.7 }}>파일을 드래그하거나 추가 버튼을 눌러주세요</div>
           </div>
         )}
         {sortedDocs().map((doc) => {
@@ -271,7 +284,14 @@ export default function DocumentList({
                       {isSelected && <span style={{ color: '#fff', fontSize: 10 }}>✓</span>}
                     </div>
                   )}
-                  <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>{/\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(doc.file_path) ? '🖼️' : '📄'}</span>
+                  <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>
+                    {/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i.test(doc.file_path) ? '🎬'
+                      : /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i.test(doc.file_path) ? '🎵'
+                      : /\.(txt|md)$/i.test(doc.file_path) ? '📝'
+                      : /\.(docx|hwp)$/i.test(doc.file_path) ? '📃'
+                      : /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(doc.file_path) ? '🖼️'
+                      : '📄'}
+                  </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 500, color: isSelected || isActive ? C.accent : C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 4, lineHeight: 1.4 }}>
                       {doc.title}
@@ -326,8 +346,11 @@ export default function DocumentList({
       )}
 
       {/* 우클릭 메뉴 */}
-      {contextMenu && (
-        <div style={{ position: 'fixed', top: contextMenu.y, left: contextMenu.x, background: C.contextMenuBg, border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 188, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}
+      {contextMenu && (() => {
+        const menuTop = Math.min(contextMenu.y, window.innerHeight - 280)
+        const menuLeft = Math.min(contextMenu.x, window.innerWidth - 210)
+        return (
+        <div style={{ position: 'fixed', top: menuTop, left: menuLeft, background: C.contextMenuBg, border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 188, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}
           onClick={(e) => e.stopPropagation()}>
           <div style={{ padding: '4px 0' }}>
             {[
@@ -356,7 +379,8 @@ export default function DocumentList({
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* 태그 패널 */}
       {tagMenuDoc && (

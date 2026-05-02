@@ -8,7 +8,7 @@ import { useTheme } from './ThemeContext'
 import './assets/main.css'
 
 function isSupportedFile(name: string): boolean {
-  return /\.(pdf|jpg|jpeg|png|gif|bmp|webp)$/i.test(name)
+  return /\.(pdf|jpg|jpeg|png|gif|bmp|webp|mp4|mkv|avi|mov|wmv|flv|webm|m4v|mp3|wav|aiff|alac|flac|m4a|ogg|aac|txt|md|docx|hwp)$/i.test(name)
 }
 
 function App(): React.ReactElement {
@@ -26,6 +26,7 @@ function App(): React.ReactElement {
   const [isDroppingFile, setIsDroppingFile] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [isFirstTime, setIsFirstTime] = useState(false)
+  const [selectedFileType, setSelectedFileType] = useState<string | null>(null)
   const dragCountRef = useRef(0)
 
   const reload = useCallback(() => setReloadTrigger(t => t + 1), [])
@@ -40,12 +41,14 @@ function App(): React.ReactElement {
       if (action === 'import') handleImport()
       if (action === 'settings') { setIsFirstTime(false); setShowSettings(true) }
     })
+    window.api.onVaultChanged(() => reload())
   }, [])
 
   useEffect(() => {
     const resetDrag = () => {
       dragCountRef.current = 0
       setIsDroppingFile(false)
+      setDraggingDoc(null)
     }
     window.addEventListener('dragend', resetDrag)
     window.addEventListener('drop', resetDrag)
@@ -239,13 +242,16 @@ function App(): React.ReactElement {
         selectedFolderId={selectedFolderId}
         selectedTagIds={selectedTagIds}
         view={view}
-        onSelectFolder={(id) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all') }}
+        selectedFileType={selectedFileType}
+        onSelectFileType={(t) => { setSelectedFileType(t === selectedFileType ? null : t); setSelectedFolderId(undefined); setSelectedTagIds([]); setView('all') }}
+        onSelectFolder={(id) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all'); setSelectedFileType(null) }}
         onSelectTag={(id) => {
           setSelectedTagIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
           setSelectedFolderId(undefined)
           setView('all')
+          setSelectedFileType(null)
         }}
-        onSelectView={(v) => { setView(v); setSelectedFolderId(undefined); setSelectedTagIds([]) }}
+        onSelectView={(v) => { setView(v); setSelectedFolderId(undefined); setSelectedTagIds([]); setSelectedFileType(null) }}
         onCreateFolder={handleCreateFolder}
         onCreateTag={handleCreateTag}
         onImport={handleImport}
@@ -268,6 +274,7 @@ function App(): React.ReactElement {
         folders={folders}
         tags={tags}
         selectedDoc={selectedDoc}
+        selectedFileType={selectedFileType}
         onSelectDoc={handleSelectDoc}
         onToggleFavorite={handleToggleFavorite}
         onMoveDocument={handleMoveDocument}
@@ -312,7 +319,7 @@ function App(): React.ReactElement {
                 ? `${folders.find(f => f.id === selectedFolderId)?.name} 에 추가`
                 : '전체 문서에 추가'}
             </div>
-            <div style={{ fontSize: 11, color: C.textDim }}>PDF 또는 이미지 파일을 놓으세요</div>
+            <div style={{ fontSize: 11, color: C.textDim }}>지원 파일을 놓으세요</div>
           </div>
         </div>
       )}

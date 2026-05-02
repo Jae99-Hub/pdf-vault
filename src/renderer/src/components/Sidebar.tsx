@@ -13,6 +13,8 @@ interface Props {
   selectedFolderId: number | undefined
   selectedTagIds: number[]
   view: 'all' | 'favorites' | 'recent'
+  selectedFileType: string | null
+  onSelectFileType: (type: string) => void
   onSelectFolder: (id: number | undefined) => void
   onSelectTag: (id: number) => void
   onSelectView: (v: 'all' | 'favorites' | 'recent') => void
@@ -30,6 +32,14 @@ interface Props {
   onDropFileToFolder: (folderId: number | null, files: string[]) => void
   onOpenSettings: () => void
 }
+
+const FILE_TYPES = [
+  { key: 'pdf', label: '📄 PDF' },
+  { key: 'image', label: '🖼️ 이미지' },
+  { key: 'video', label: '🎬 동영상' },
+  { key: 'audio', label: '🎵 음원' },
+  { key: 'doc', label: '📝 문서' },
+]
 
 const TAG_COLORS = ['#4d94e8', '#1D9E75', '#D85A30', '#7F77DD', '#BA7517']
 
@@ -66,6 +76,7 @@ function NavItem({ label, active, onClick, colors }: { label: string; active: bo
 
 export default function Sidebar({
   folders, tags, selectedFolderId, selectedTagIds, view,
+  selectedFileType, onSelectFileType,
   onSelectFolder, onSelectTag, onSelectView, onCreateFolder, onCreateTag,
   onImport, searchQuery, onSearch, draggingDoc, onDropToFolder,
   onDeleteFolder, onRenameFolder, onDeleteTag, onRenameTag, onDropFileToFolder,
@@ -127,7 +138,7 @@ export default function Sidebar({
     const files: string[] = []
     for (let i = 0; i < e.dataTransfer.files.length; i++) {
       const f = e.dataTransfer.files[i]
-      if (/\.(pdf|jpg|jpeg|png|gif|bmp|webp)$/i.test(f.name)) {
+      if (/\.(pdf|jpg|jpeg|png|gif|bmp|webp|mp4|mkv|avi|mov|wmv|flv|webm|m4v|mp3|wav|aiff|alac|flac|m4a|ogg|aac|txt|md|docx|hwp)$/i.test(f.name)) {
         const path = window.api.getPathForFile(f)
         if (path) files.push(path)
       }
@@ -307,6 +318,14 @@ export default function Sidebar({
 
         <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
 
+        {/* 유형 */}
+        <div style={sectionLabel}>유형</div>
+        {FILE_TYPES.map(ft => (
+          <NavItem key={ft.key} label={ft.label} active={selectedFileType === ft.key} onClick={() => onSelectFileType(ft.key)} colors={C} />
+        ))}
+
+        <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
+
         {/* 폴더 */}
         <div style={{ display: 'flex', alignItems: 'center', paddingRight: 10 }}>
           <span style={sectionLabel}>폴더</span>
@@ -319,11 +338,13 @@ export default function Sidebar({
         </div>
 
         {showFolderInput && (
-          <div style={{ padding: '4px 10px 6px' }}>
+          <div style={{ padding: '4px 10px 6px' }} onClick={e => e.stopPropagation()}>
             <input autoFocus value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
-              onBlur={() => { if (newFolderName.trim()) handleCreateFolder(); else setShowFolderInput(false) }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateFolder()
+                if (e.key === 'Escape') { setNewFolderName(''); setShowFolderInput(false) }
+              }}
               placeholder="폴더 이름..."
               style={inputStyle}
             />
@@ -445,9 +466,12 @@ export default function Sidebar({
       </div>
 
       {/* 컨텍스트 메뉴 */}
-      {contextMenu && (
+      {contextMenu && (() => {
+        const menuTop = Math.min(contextMenu.y, window.innerHeight - 280)
+        const menuLeft = Math.min(contextMenu.x, window.innerWidth - 210)
+        return (
         <div
-          style={{ position: 'fixed', top: contextMenu.y, left: contextMenu.x, background: '#2a2a33', border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 164, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', overflow: 'hidden' }}
+          style={{ position: 'fixed', top: menuTop, left: menuLeft, background: '#2a2a33', border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 164, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', overflow: 'hidden' }}
           onClick={(e) => e.stopPropagation()}
         >
           <div style={{ padding: '4px 0' }}>
@@ -463,7 +487,8 @@ export default function Sidebar({
             ))}
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

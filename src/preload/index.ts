@@ -53,4 +53,7 @@ getDocumentsByTags: (tagIds: number[]) => ipcRenderer.invoke('get-documents-by-t
 getTextHighlights: (documentId: number) => ipcRenderer.invoke('get-text-highlights', documentId),
 addTextHighlight: (documentId: number, page: number, rects: string, selectedText: string, color: string) => ipcRenderer.invoke('add-text-highlight', documentId, page, rects, selectedText, color),
 deleteTextHighlight: (highlightId: number) => ipcRenderer.invoke('delete-text-highlight', highlightId),
+readTextFile: (filePath: string) => ipcRenderer.invoke('read-text-file', filePath),
+openExternalFile: (filePath: string) => ipcRenderer.invoke('open-external-file', filePath),
+onVaultChanged: (callback: () => void) => { ipcRenderer.on('vault-file-changed', () => callback()) },
 })

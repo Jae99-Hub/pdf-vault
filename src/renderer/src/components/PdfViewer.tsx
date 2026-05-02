@@ -16,6 +16,29 @@ function isImageFile(filePath: string): boolean {
   return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(filePath)
 }
 
+function isVideoFile(filePath: string): boolean {
+  return /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i.test(filePath)
+}
+
+function isAudioFile(filePath: string): boolean {
+  return /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i.test(filePath)
+}
+
+function isTextDocFile(filePath: string): boolean {
+  return /\.(txt|md|docx|hwp)$/i.test(filePath)
+}
+
+function isPreviewableText(filePath: string): boolean {
+  return /\.(txt|md)$/i.test(filePath)
+}
+
+function formatAudioTime(sec: number): string {
+  if (!isFinite(sec)) return '0:00'
+  const m = Math.floor(sec / 60)
+  const s = Math.floor(sec % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 function fileToUrl(filePath: string): string {
   return 'file:///' + filePath.replace(/\\/g, '/')
 }
@@ -47,17 +70,30 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
 
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number } | null>(null)
 
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const [audioPlaying, setAudioPlaying] = useState(false)
+  const [audioTime, setAudioTime] = useState(0)
+  const [audioDuration, setAudioDuration] = useState(0)
+  const [textContent, setTextContent] = useState<string | null>(null)
+
   useEffect(() => {
     if (!document) return
-    setPdfDoc(null)
-    setTotalPages(0)
-    setCurrentPage(1)
-    setMemos([])
-    setHighlights([])
-    if (!isImageFile(document.file_path)) {
-      loadPdf(document.file_path)
-      loadHighlights(document.id)
+    setPdfDoc(null); setTotalPages(0); setCurrentPage(1)
+    setMemos([]); setHighlights([])
+    setTextContent(null); setAudioPlaying(false); setAudioTime(0)
+    const isImg = isImageFile(document.file_path)
+    const isVid = isVideoFile(document.file_path)
+    const isAud = isAudioFile(document.file_path)
+    const isTxt = isTextDocFile(document.file_path)
+    if (isImg || isVid || isAud || isTxt) {
+      loadMemos(document.id)
+      if (isTxt && isPreviewableText(document.file_path)) {
+        window.api.readTextFile(document.file_path).then(setTextContent).catch(() => setTextContent(null))
+      }
+      return
     }
+    loadPdf(document.file_path)
+    loadHighlights(document.id)
     loadMemos(document.id)
   }, [document])
 
@@ -198,6 +234,9 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
   const pageHighlights = highlights.filter(h => h.page === currentPage)
 
   const isImg = !!document && isImageFile(document.file_path)
+  const isVid = !!document && isVideoFile(document.file_path)
+  const isAud = !!document && isAudioFile(document.file_path)
+  const isTxt = !!document && isTextDocFile(document.file_path)
 
   if (!document) {
     return (
@@ -219,10 +258,14 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
 
         {/* 툴바 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, padding: '0 10px', height: 36, borderBottom: `1px solid ${C.border}`, background: C.toolbar, flexShrink: 0 }}>
-          <ToolBtn onClick={() => setScale(s => Math.max(0.3, s - 0.2))}>−</ToolBtn>
-          <span style={{ fontSize: 11, color: C.textMuted, minWidth: 38, textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
-          <ToolBtn onClick={() => setScale(s => Math.min(4, s + 0.2))}>+</ToolBtn>
-          {!isImg && (
+          {(isImg || (!isVid && !isAud && !isTxt)) && (
+            <>
+              <ToolBtn onClick={() => setScale(s => Math.max(0.3, s - 0.2))}>−</ToolBtn>
+              <span style={{ fontSize: 11, color: C.textMuted, minWidth: 38, textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+              <ToolBtn onClick={() => setScale(s => Math.min(4, s + 0.2))}>+</ToolBtn>
+            </>
+          )}
+          {!isImg && !isVid && !isAud && !isTxt && (
             <>
               <Divider />
               <ToolBtn onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}>◂</ToolBtn>
@@ -248,50 +291,102 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
           </div>
         )}
 
-        {/* 뷰어 캔버스 / 이미지 */}
-        <div style={{ flex: 1, overflow: 'auto', background: C.canvas, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 24 }}>
-          {isImg ? (
-            <img
-              src={fileToUrl(document.file_path)}
-              alt={document.title}
-              style={{
-                width: `${Math.round(700 * scale)}px`,
-                height: 'auto',
-                display: 'block',
-                boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
-                borderRadius: 2,
-                flexShrink: 0,
-              }}
-            />
-          ) : (
-            <div
-              ref={pageContainerRef}
-              style={{ position: 'relative', display: 'inline-block', flexShrink: 0 }}
-              onMouseUp={handlePageContainerMouseUp}
-            >
-              <canvas ref={canvasRef} style={{ display: 'block', boxShadow: '0 4px 24px rgba(0,0,0,0.6)', borderRadius: 2 }} />
-
-              {/* 하이라이트 레이어 */}
-              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
-                {pageHighlights.map(h => {
-                  const rects: NormalizedRect[] = JSON.parse(h.rects)
-                  return rects.map((r, i) => (
-                    <div key={`${h.id}-${i}`} style={{
-                      position: 'absolute',
-                      left: `${r.x * 100}%`, top: `${r.y * 100}%`,
-                      width: `${r.w * 100}%`, height: `${r.h * 100}%`,
-                      background: h.color, opacity: 0.45,
-                      mixBlendMode: 'multiply', borderRadius: 2,
-                    }} />
-                  ))
-                })}
+        {/* 뷰어 캔버스 / 이미지 / 동영상 / 음원 / 텍스트 */}
+        {isVid && (
+          <div style={{ flex: 1, overflow: 'hidden', background: '#000', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+            <video key={document.file_path} src={fileToUrl(document.file_path)} controls
+              style={{ maxWidth: '100%', maxHeight: '100%' }} />
+          </div>
+        )}
+        {isAud && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: C.bg, gap: 24 }}>
+            <audio ref={audioRef} src={fileToUrl(document.file_path)}
+              onTimeUpdate={() => setAudioTime(audioRef.current?.currentTime ?? 0)}
+              onDurationChange={() => setAudioDuration(audioRef.current?.duration ?? 0)}
+              onEnded={() => setAudioPlaying(false)} />
+            <div style={{ width: 160, height: 160, borderRadius: 16, background: C.surface, border: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 64 }}>🎵</div>
+            <div style={{ fontSize: 14, color: C.text, fontWeight: 600, maxWidth: 300, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{document.title}</div>
+            <div style={{ width: 280 }}>
+              <input type="range" min={0} max={audioDuration || 1} value={audioTime} step={0.1}
+                onChange={e => { if (audioRef.current) audioRef.current.currentTime = Number(e.target.value); setAudioTime(Number(e.target.value)) }}
+                style={{ width: '100%', accentColor: C.accent }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.textMuted, marginTop: 4 }}>
+                <span>{formatAudioTime(audioTime)}</span>
+                <span>{formatAudioTime(audioDuration)}</span>
               </div>
-
-              {/* 텍스트 레이어 */}
-              <div ref={textLayerRef} className="pdf-text-layer" style={{ zIndex: 2 }} />
             </div>
-          )}
-        </div>
+            <button onClick={() => {
+              if (!audioRef.current) return
+              if (audioPlaying) { audioRef.current.pause(); setAudioPlaying(false) }
+              else { audioRef.current.play(); setAudioPlaying(true) }
+            }} style={{ width: 56, height: 56, borderRadius: '50%', background: C.accent, border: 'none', color: '#fff', fontSize: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {audioPlaying ? '⏸' : '▶'}
+            </button>
+          </div>
+        )}
+        {isTxt && (
+          isPreviewableText(document.file_path)
+            ? <div style={{ flex: 1, overflow: 'auto', background: C.bg, padding: 24 }}>
+                {textContent !== null
+                  ? <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 13, color: C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.7, margin: 0 }}>{textContent}</pre>
+                  : <div style={{ color: C.textMuted, textAlign: 'center', marginTop: 60 }}>파일을 불러오는 중...</div>
+                }
+              </div>
+            : <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, background: C.bg }}>
+                <div style={{ fontSize: 48 }}>{/\.docx$/i.test(document.file_path) ? '📝' : '📃'}</div>
+                <div style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>{document.title}</div>
+                <div style={{ fontSize: 12, color: C.textMuted }}>{/\.docx$/i.test(document.file_path) ? 'Word 문서' : 'HWP 문서'} — 미리보기 불가</div>
+                <button onClick={() => window.api.openExternalFile(document.file_path)}
+                  style={{ padding: '8px 18px', background: C.accent, border: 'none', borderRadius: 7, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>
+                  외부 프로그램으로 열기
+                </button>
+              </div>
+        )}
+        {!isVid && !isAud && !isTxt && (
+          <div style={{ flex: 1, overflow: 'auto', background: C.canvas, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 24 }}>
+            {isImg ? (
+              <img
+                src={fileToUrl(document.file_path)}
+                alt={document.title}
+                style={{
+                  width: `${Math.round(700 * scale)}px`,
+                  height: 'auto',
+                  display: 'block',
+                  boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
+                  borderRadius: 2,
+                  flexShrink: 0,
+                }}
+              />
+            ) : (
+              <div
+                ref={pageContainerRef}
+                style={{ position: 'relative', display: 'inline-block', flexShrink: 0 }}
+                onMouseUp={handlePageContainerMouseUp}
+              >
+                <canvas ref={canvasRef} style={{ display: 'block', boxShadow: '0 4px 24px rgba(0,0,0,0.6)', borderRadius: 2 }} />
+
+                {/* 하이라이트 레이어 */}
+                <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
+                  {pageHighlights.map(h => {
+                    const rects: NormalizedRect[] = JSON.parse(h.rects)
+                    return rects.map((r, i) => (
+                      <div key={`${h.id}-${i}`} style={{
+                        position: 'absolute',
+                        left: `${r.x * 100}%`, top: `${r.y * 100}%`,
+                        width: `${r.w * 100}%`, height: `${r.h * 100}%`,
+                        background: h.color, opacity: 0.45,
+                        mixBlendMode: 'multiply', borderRadius: 2,
+                      }} />
+                    ))
+                  })}
+                </div>
+
+                {/* 텍스트 레이어 */}
+                <div ref={textLayerRef} className="pdf-text-layer" style={{ zIndex: 2 }} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 오른쪽 패널 */}
@@ -299,7 +394,7 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
         <div style={{ width: 220, flexShrink: 0, borderLeft: `1px solid ${C.border}`, background: C.panelBg, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* 탭 */}
           <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-            {(isImg ? ['memo'] as const : ['memo', 'highlight'] as const).map(tab => (
+            {(isImg || isVid || isAud || isTxt ? ['memo'] as const : ['memo', 'highlight'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)} style={{
                 flex: 1, height: 36, border: 'none', cursor: 'pointer', fontSize: 11,
                 background: activeTab === tab ? C.surface : 'transparent',
@@ -370,7 +465,7 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
       )}
 
       {/* 형광펜 색 선택 팝업 */}
-      {!isImg && selectionPopup && (
+      {!isImg && !isVid && !isAud && !isTxt && selectionPopup && (
         <div
           style={{ position: 'fixed', left: selectionPopup.x - 8, top: selectionPopup.y - 46, zIndex: 99999, background: '#22222a', border: '1px solid #3a3a48', borderRadius: 10, padding: '6px 10px', display: 'flex', gap: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.6)' }}
           onMouseDown={e => e.stopPropagation()}

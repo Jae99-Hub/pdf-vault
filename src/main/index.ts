@@ -59,8 +59,20 @@ function isImageFile(p: string): boolean {
   return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(p)
 }
 
+function isVideoFile(p: string): boolean {
+  return /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i.test(p)
+}
+
+function isAudioFile(p: string): boolean {
+  return /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i.test(p)
+}
+
+function isTextDocFile(p: string): boolean {
+  return /\.(txt|md|docx|hwp)$/i.test(p)
+}
+
 function isSupportedFile(p: string): boolean {
-  return p.toLowerCase().endsWith('.pdf') || isImageFile(p)
+  return /\.pdf$/i.test(p) || isImageFile(p) || isVideoFile(p) || isAudioFile(p) || isTextDocFile(p)
 }
 
 // Build the relative path (from vault root) for a folder using its DB ancestry
@@ -119,6 +131,77 @@ function collectDocsInSubtree(folderId: number): { id: number; file_path: string
     .all(folderId) as { id: number }[]
   for (const s of subs) docs.push(...collectDocsInSubtree(s.id))
   return docs
+}
+
+// ── Vault watcher ─────────────────────────────────────────────────────────────
+
+let vaultWatcher: fs.FSWatcher | null = null
+
+function stopVaultWatcher(): void {
+  if (vaultWatcher) { vaultWatcher.close(); vaultWatcher = null }
+}
+
+function getFolderIdFromVaultPath(filePath: string): number | null {
+  if (!settings.vaultPath) return null
+  const dir = dirname(filePath)
+  if (dir === settings.vaultPath) return null
+  const rel = dir.slice(settings.vaultPath.length).replace(/^[/\\]/, '')
+  if (!rel) return null
+  const parts = rel.split(/[/\\]/).filter(Boolean)
+  let parentId: number | null = null
+  for (const part of parts) {
+    const folder = (parentId === null
+      ? db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id IS NULL').get(sanitizeName(part))
+      : db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id = ?').get(sanitizeName(part), parentId)
+    ) as { id: number } | undefined
+    if (!folder) return null
+    parentId = folder.id
+  }
+  return parentId
+}
+
+function syncExternalFileChange(fullPath: string, win: BrowserWindow): void {
+  if (!settings.vaultPath) return
+  if (fs.existsSync(fullPath)) {
+    if (!isSupportedFile(fullPath)) return
+    const existing = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(fullPath) as { id: number } | undefined
+    if (!existing) {
+      try {
+        const stat = fs.statSync(fullPath)
+        const ext = extname(fullPath)
+        const title = basename(fullPath, ext)
+        const folderId = getFolderIdFromVaultPath(fullPath)
+        db.prepare('INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)').run(title, fullPath, stat.size, folderId)
+        win.webContents.send('vault-file-changed')
+      } catch (e) { console.error('sync add error:', e) }
+    }
+  } else {
+    const existing = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(fullPath) as { id: number } | undefined
+    if (existing) {
+      db.prepare('DELETE FROM documents WHERE id = ?').run(existing.id)
+      win.webContents.send('vault-file-changed')
+    }
+  }
+}
+
+function startVaultWatcher(win: BrowserWindow): void {
+  stopVaultWatcher()
+  if (!settings.vaultPath || !fs.existsSync(settings.vaultPath)) return
+  const pending = new Map<string, ReturnType<typeof setTimeout>>()
+  try {
+    vaultWatcher = fs.watch(settings.vaultPath, { recursive: true }, (_event, filename) => {
+      if (!filename) return
+      const key = filename
+      if (pending.has(key)) clearTimeout(pending.get(key)!)
+      pending.set(key, setTimeout(() => {
+        pending.delete(key)
+        const fullPath = join(settings.vaultPath!, filename)
+        syncExternalFileChange(fullPath, win)
+      }, 500))
+    })
+  } catch (e) {
+    console.error('vault watcher error:', e)
+  }
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -219,6 +302,7 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
     setupAutoUpdater(mainWindow)
+    startVaultWatcher(mainWindow)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -281,6 +365,8 @@ function registerIpcHandlers(): void {
     settings.vaultPath = newVaultPath
     saveSettings(settings)
     fs.mkdirSync(newVaultPath, { recursive: true })
+    const win = BrowserWindow.getFocusedWindow()
+    if (win) startVaultWatcher(win)
     return newVaultPath
   })
 
@@ -303,9 +389,12 @@ function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
-        { name: '문서 및 이미지', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
+        { name: '모든 지원 파일', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mp3', 'wav', 'aiff', 'alac', 'flac', 'm4a', 'ogg', 'aac', 'txt', 'md', 'docx', 'hwp'] },
         { name: 'PDF', extensions: ['pdf'] },
         { name: '이미지', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
+        { name: '동영상', extensions: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v'] },
+        { name: '음원', extensions: ['mp3', 'wav', 'aiff', 'alac', 'flac', 'm4a', 'ogg', 'aac'] },
+        { name: '문서', extensions: ['txt', 'md', 'docx', 'hwp'] },
       ]
     })
     if (result.canceled) return []
@@ -645,6 +734,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('delete-memo', (_e, memoId: number) => {
     db.prepare('DELETE FROM memos WHERE id = ?').run(memoId)
+  })
+
+  ipcMain.handle('read-text-file', (_e, filePath: string) => {
+    return fs.readFileSync(filePath, 'utf-8')
+  })
+
+  ipcMain.handle('open-external-file', (_e, filePath: string) => {
+    shell.openPath(filePath)
   })
 }
 

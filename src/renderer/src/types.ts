@@ -89,6 +89,9 @@ importPdfPaths: (filePaths: string[], folderId?: number | null) => Promise<objec
 deleteTag: (tagId: number) => Promise<void>
 renameTag: (tagId: number, name: string) => Promise<void>
 getPathForFile: (file: File) => string
+  readTextFile: (filePath: string) => Promise<string>
+  openExternalFile: (filePath: string) => Promise<void>
+  onVaultChanged: (callback: () => void) => void
 }
 
 declare global {
