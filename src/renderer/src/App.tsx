@@ -160,7 +160,7 @@ function App(): React.ReactElement {
 
   async function handleDeleteTag(tagId: number): Promise<void> {
     await window.api.deleteTag(tagId)
-    if (selectedTagId === tagId) setSelectedTagId(undefined)
+    if (selectedTagIds.includes(tagId)) setSelectedTagIds(prev => prev.filter(id => id !== tagId))
     window.api.getTags().then(setTags)
     reload()
   }
