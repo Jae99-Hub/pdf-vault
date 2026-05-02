@@ -28,7 +28,7 @@ export default function Settings({ isFirstTime, onClose }: Props): React.ReactEl
   const [loading, setLoading] = useState(false)
   const [migrated, setMigrated] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
-  const appVersion = '__APP_VERSION__'
+  const appVersion = __APP_VERSION__
 
   useEffect(() => {
     window.api.getVaultPath().then((p) => { setVaultPath(p ?? ''); setPrevPath(p ?? '') })
