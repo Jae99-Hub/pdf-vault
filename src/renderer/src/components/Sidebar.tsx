@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Folder, Tag, Document } from '../types'
+import { useTheme } from '../ThemeContext'
 
 interface FolderNode {
   folder: Folder
@@ -32,19 +33,6 @@ interface Props {
 
 const TAG_COLORS = ['#4d94e8', '#1D9E75', '#D85A30', '#7F77DD', '#BA7517']
 
-const C = {
-  surface: '#22222a',
-  hover: '#2a2a33',
-  active: '#1a3560',
-  activeBorder: '#4d94e8',
-  dropHover: '#163328',
-  dropText: '#4eca7c',
-  border: '#2e2e38',
-  text: '#d0d0da',
-  muted: '#666678',
-  accent: '#4d94e8',
-}
-
 function buildTree(folders: Folder[], parentId: number | null = null): FolderNode[] {
   return folders
     .filter(f => f.parent_id === (parentId ?? null))
@@ -57,7 +45,7 @@ const sectionLabel: React.CSSProperties = {
   letterSpacing: '0.08em', fontWeight: 600, padding: '10px 14px 4px', flex: 1
 }
 
-function NavItem({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }): React.ReactElement {
+function NavItem({ label, active, onClick, colors }: { label: string; active: boolean; onClick: () => void; colors: { active: string; hover: string; text: string; activeBorder: string; accent: string } }): React.ReactElement {
   const [hov, setHov] = useState(false)
   return (
     <div
@@ -67,9 +55,9 @@ function NavItem({ label, active, onClick }: { label: string; active: boolean; o
       style={{
         padding: '6px 14px', cursor: 'pointer', borderRadius: 6,
         margin: '1px 8px', fontSize: 12, fontWeight: active ? 500 : 400,
-        background: active ? C.active : hov ? C.hover : 'transparent',
-        color: active ? '#a0c4ff' : C.text,
-        borderLeft: active ? `2px solid ${C.activeBorder}` : '2px solid transparent',
+        background: active ? colors.active : hov ? colors.hover : 'transparent',
+        color: active ? colors.accent : colors.text,
+        borderLeft: active ? `2px solid ${colors.activeBorder}` : '2px solid transparent',
         transition: 'background 0.12s, color 0.12s',
       }}
     >{label}</div>
@@ -83,6 +71,19 @@ export default function Sidebar({
   onDeleteFolder, onRenameFolder, onDeleteTag, onRenameTag, onDropFileToFolder,
   onOpenSettings
 }: Props): React.ReactElement {
+  const t = useTheme()
+  const C = {
+    surface: t.sidebarBg,
+    hover: t.hover,
+    active: t.active,
+    activeBorder: t.activeBorder,
+    dropHover: t.dropHover,
+    dropText: t.dropText,
+    border: t.border,
+    text: t.text,
+    muted: t.muted,
+    accent: t.accent,
+  }
   const [newFolderName, setNewFolderName] = useState('')
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState(TAG_COLORS[0])
@@ -300,9 +301,9 @@ export default function Sidebar({
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {/* 라이브러리 */}
         <div style={sectionLabel}>라이브러리</div>
-        <NavItem label="📚 전체 문서" active={view === 'all' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('all')} />
-        <NavItem label="⭐ 즐겨찾기" active={view === 'favorites' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('favorites')} />
-        <NavItem label="🕐 최근 열람" active={view === 'recent' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('recent')} />
+        <NavItem label="📚 전체 문서" active={view === 'all' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('all')} colors={C} />
+        <NavItem label="⭐ 즐겨찾기" active={view === 'favorites' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('favorites')} colors={C} />
+        <NavItem label="🕐 최근 열람" active={view === 'recent' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('recent')} colors={C} />
 
         <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
 

@@ -4,6 +4,7 @@ import DocumentList from './components/DocumentList'
 import PdfViewer from './components/PdfViewer'
 import Settings from './components/Settings'
 import { Document, Folder, Tag } from './types'
+import { useTheme } from './ThemeContext'
 import './assets/main.css'
 
 function isSupportedFile(name: string): boolean {
@@ -11,6 +12,7 @@ function isSupportedFile(name: string): boolean {
 }
 
 function App(): React.ReactElement {
+  const C = useTheme()
   const [folders, setFolders] = useState<Folder[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [documents, setDocuments] = useState<Document[]>([])
@@ -223,7 +225,7 @@ function App(): React.ReactElement {
       style={{
         display: 'flex', width: '100vw', height: '100vh',
         fontFamily: 'Segoe UI, sans-serif', fontSize: '13px',
-        background: '#16161a', color: '#e2e2e8', overflow: 'hidden',
+        background: C.bg, color: C.text, overflow: 'hidden',
         position: 'fixed', top: 0, left: 0
       }}
       onDragEnter={handleWindowDragEnter}
@@ -287,30 +289,30 @@ function App(): React.ReactElement {
       {isDroppingFile && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 99999,
-          background: 'rgba(77, 148, 232, 0.1)',
-          border: '2px dashed #4d94e8',
+          background: `${C.accent}18`,
+          border: `2px dashed ${C.accent}`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           pointerEvents: 'none',
           backdropFilter: 'blur(2px)'
         }}>
           <div style={{
-            background: '#1e1e24', borderRadius: 14, padding: '28px 48px',
-            border: '1px solid #4d94e8',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            background: C.surface, borderRadius: 14, padding: '28px 48px',
+            border: `1px solid ${C.accent}`,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
             textAlign: 'center'
           }}>
             <div style={{
               width: 52, height: 52, borderRadius: 12,
-              background: '#1a3560', border: '1px solid #4d94e8',
+              background: C.accentDim, border: `1px solid ${C.accent}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 24, margin: '0 auto 14px'
             }}>📄</div>
-            <div style={{ fontSize: 14, color: '#7cb8e8', fontWeight: 600, marginBottom: 4 }}>
+            <div style={{ fontSize: 14, color: C.accent, fontWeight: 600, marginBottom: 4 }}>
               {selectedFolderId
                 ? `${folders.find(f => f.id === selectedFolderId)?.name} 에 추가`
                 : '전체 문서에 추가'}
             </div>
-            <div style={{ fontSize: 11, color: '#4a4a5a' }}>PDF 또는 이미지 파일을 놓으세요</div>
+            <div style={{ fontSize: 11, color: C.textDim }}>PDF 또는 이미지 파일을 놓으세요</div>
           </div>
         </div>
       )}

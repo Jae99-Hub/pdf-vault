@@ -1,27 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Document, Memo, TextHighlight } from '../types'
+import { useTheme } from '../ThemeContext'
 import * as pdfjsLib from 'pdfjs-dist'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.js',
   import.meta.url
 ).toString()
-
-const C = {
-  bg: '#16161a',
-  surface: '#1e1e24',
-  toolbar: '#1a1a20',
-  border: '#2a2a33',
-  borderLight: '#32323e',
-  text: '#e2e2e8',
-  textMuted: '#8888a0',
-  textDim: '#4a4a5a',
-  accent: '#4d94e8',
-  accentDim: '#1a3560',
-  canvas: '#2a2a32',
-  panelBg: '#1a1a20',
-  danger: '#e05555',
-}
 
 const HIGHLIGHT_COLORS = ['#ffe066', '#90e89a', '#7ac8f5', '#f5a0d0', '#ffb347']
 
@@ -41,6 +26,7 @@ interface Props {
 }
 
 export default function PdfViewer({ document, onPageCountUpdate }: Props): React.ReactElement {
+  const C = useTheme()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const pageContainerRef = useRef<HTMLDivElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)

@@ -1,21 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { UpdateStatus } from '../types'
-
-const C = {
-  bg: '#16161a',
-  surface: '#1e1e24',
-  card: '#22222b',
-  border: '#2a2a33',
-  borderLight: '#32323e',
-  text: '#e2e2e8',
-  textMuted: '#8888a0',
-  textDim: '#4a4a5a',
-  accent: '#4d94e8',
-  accentDim: '#1a3560',
-  success: '#4ec97e',
-  warning: '#f0c040',
-  danger: '#e05555',
-}
+import { useThemeContext } from '../ThemeContext'
 
 interface Props {
   isFirstTime: boolean
@@ -23,6 +8,7 @@ interface Props {
 }
 
 export default function Settings({ isFirstTime, onClose }: Props): React.ReactElement {
+  const { theme: C, mode, toggle } = useThemeContext()
   const [vaultPath, setVaultPath] = useState<string>('')
   const [prevPath, setPrevPath] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -95,6 +81,38 @@ export default function Settings({ isFirstTime, onClose }: Props): React.ReactEl
             {!loading && !migrated && vaultPath && <span style={{ color: C.success }}>✓ 이 폴더에 PDF가 복사되고, 폴더/파일명 변경도 동기화됩니다.</span>}
           </div>
         </div>
+
+        {/* 테마 */}
+        {!isFirstTime && (
+          <>
+            <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 22 }} />
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                테마
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                {(['dark', 'light'] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={() => { if (mode !== m) toggle() }}
+                    style={{
+                      flex: 1, padding: '10px 0', borderRadius: 8, cursor: 'pointer',
+                      border: `1px solid ${mode === m ? C.accent : C.border}`,
+                      background: mode === m ? C.accentDim : C.bg,
+                      color: mode === m ? C.accent : C.textMuted,
+                      fontSize: 12, fontWeight: mode === m ? 600 : 400,
+                      transition: 'all 0.15s', display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', gap: 5
+                    }}
+                  >
+                    <span style={{ fontSize: 18 }}>{m === 'dark' ? '🌙' : '☀️'}</span>
+                    <span>{m === 'dark' ? '다크' : '라이트'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* 업데이트 — 초기 설정 화면에서는 숨김 */}
         {!isFirstTime && (
