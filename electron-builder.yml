@@ -1,0 +1,29 @@
+appId: com.pdfvault.app
+productName: PDF Vault
+directories:
+  buildResources: resources
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - resources/**
+  - node_modules/better-sqlite3/**
+  - node_modules/bindings/**
+  - node_modules/file-uri-to-path/**
+win:
+  executableName: pdf-vault
+  forceCodeSigning: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  artifactName: ${name}-setup-${version}.${ext}
+  shortcutName: PDF Vault
+  uninstallDisplayName: PDF Vault
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
