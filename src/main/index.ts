@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, MenuItem } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { join, basename, dirname, sep } from 'path'
+import { join, basename, dirname, sep, extname } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Database from 'better-sqlite3'
 import fs from 'fs'
@@ -55,6 +55,14 @@ function sanitizeName(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || 'untitled'
 }
 
+function isImageFile(p: string): boolean {
+  return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(p)
+}
+
+function isSupportedFile(p: string): boolean {
+  return p.toLowerCase().endsWith('.pdf') || isImageFile(p)
+}
+
 // Build the relative path (from vault root) for a folder using its DB ancestry
 function getFolderRelPath(folderId: number): string {
   const parts: string[] = []
@@ -80,12 +88,12 @@ function ensureVaultDir(folderId: number | null): string | null {
 }
 
 // Resolve a unique destination path in dir for a given base name (no ext)
-function uniquePath(dir: string, title: string, avoid?: string): string {
+function uniquePath(dir: string, title: string, ext: string, avoid?: string): string {
   const safe = sanitizeName(title)
-  let dest = join(dir, `${safe}.pdf`)
+  let dest = join(dir, `${safe}${ext}`)
   let i = 1
   while (fs.existsSync(dest) && dest !== avoid) {
-    dest = join(dir, `${safe} (${i}).pdf`)
+    dest = join(dir, `${safe} (${i})${ext}`)
     i++
   }
   return dest
@@ -95,7 +103,8 @@ function uniquePath(dir: string, title: string, avoid?: string): string {
 function copyToVault(srcPath: string, title: string, folderId: number | null): string | null {
   const dir = ensureVaultDir(folderId)
   if (!dir) return null
-  const dest = uniquePath(dir, title, srcPath)
+  const ext = extname(srcPath).toLowerCase() || '.pdf'
+  const dest = uniquePath(dir, title, ext, srcPath)
   if (dest !== srcPath) fs.copyFileSync(srcPath, dest)
   return dest
 }
@@ -293,15 +302,21 @@ function registerIpcHandlers(): void {
   ipcMain.handle('import-pdf', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+      filters: [
+        { name: '문서 및 이미지', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
+        { name: 'PDF', extensions: ['pdf'] },
+        { name: '이미지', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
+      ]
     })
     if (result.canceled) return []
 
     const imported: object[] = []
     for (const srcPath of result.filePaths) {
+      if (!isSupportedFile(srcPath)) continue
       try {
         const stat = fs.statSync(srcPath)
-        const title = basename(srcPath, '.pdf')
+        const ext = extname(srcPath)
+        const title = basename(srcPath, ext)
         const storedPath = settings.vaultPath
           ? (copyToVault(srcPath, title, null) ?? srcPath)
           : srcPath
@@ -322,10 +337,11 @@ function registerIpcHandlers(): void {
   ipcMain.handle('import-pdf-paths', async (_e, filePaths: string[], folderId?: number | null) => {
     const imported: object[] = []
     for (const srcPath of filePaths) {
-      if (!srcPath.toLowerCase().endsWith('.pdf')) continue
+      if (!isSupportedFile(srcPath)) continue
       try {
         const stat = fs.statSync(srcPath)
-        const title = basename(srcPath, '.pdf')
+        const ext = extname(srcPath)
+        const title = basename(srcPath, ext)
         const storedPath = settings.vaultPath
           ? (copyToVault(srcPath, title, folderId ?? null) ?? srcPath)
           : srcPath
@@ -395,7 +411,8 @@ function registerIpcHandlers(): void {
       if (doc && doc.file_path.startsWith(settings.vaultPath)) {
         try {
           const dir = dirname(doc.file_path)
-          const dest = uniquePath(dir, title, doc.file_path)
+          const ext = extname(doc.file_path) || '.pdf'
+          const dest = uniquePath(dir, title, ext, doc.file_path)
           if (fs.existsSync(doc.file_path)) fs.renameSync(doc.file_path, dest)
           db.prepare('UPDATE documents SET title = ?, file_path = ? WHERE id = ?').run(
             title, dest, documentId
@@ -418,7 +435,8 @@ function registerIpcHandlers(): void {
         try {
           const dir = ensureVaultDir(folderId)
           if (dir) {
-            const dest = uniquePath(dir, doc.title, doc.file_path)
+            const ext = extname(doc.file_path) || '.pdf'
+            const dest = uniquePath(dir, doc.title, ext, doc.file_path)
             if (fs.existsSync(doc.file_path) && doc.file_path !== dest) {
               fs.renameSync(doc.file_path, dest)
             }
@@ -577,7 +595,8 @@ function registerIpcHandlers(): void {
         // Move every PDF in the subtree back to vault root
         for (const doc of docs) {
           if (doc.file_path.startsWith(settings.vaultPath) && fs.existsSync(doc.file_path)) {
-            const dest = uniquePath(settings.vaultPath, basename(doc.file_path, '.pdf'), doc.file_path)
+            const docExt = extname(doc.file_path) || '.pdf'
+            const dest = uniquePath(settings.vaultPath, basename(doc.file_path, docExt), docExt, doc.file_path)
             if (doc.file_path !== dest) fs.renameSync(doc.file_path, dest)
             upd.run(dest, doc.id)
           }

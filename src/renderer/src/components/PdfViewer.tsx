@@ -27,6 +27,14 @@ const HIGHLIGHT_COLORS = ['#ffe066', '#90e89a', '#7ac8f5', '#f5a0d0', '#ffb347']
 
 interface NormalizedRect { x: number; y: number; w: number; h: number }
 
+function isImageFile(filePath: string): boolean {
+  return /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(filePath)
+}
+
+function fileToUrl(filePath: string): string {
+  return 'file:///' + filePath.replace(/\\/g, '/')
+}
+
 interface Props {
   document: Document | null
   onPageCountUpdate?: (docId: number, pageCount: number) => void
@@ -55,10 +63,16 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
 
   useEffect(() => {
     if (!document) return
-    loadPdf(document.file_path)
-    loadMemos(document.id)
-    loadHighlights(document.id)
+    setPdfDoc(null)
+    setTotalPages(0)
     setCurrentPage(1)
+    setMemos([])
+    setHighlights([])
+    if (!isImageFile(document.file_path)) {
+      loadPdf(document.file_path)
+      loadHighlights(document.id)
+    }
+    loadMemos(document.id)
   }, [document])
 
   useEffect(() => {
@@ -197,6 +211,8 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
 
   const pageHighlights = highlights.filter(h => h.page === currentPage)
 
+  const isImg = !!document && isImageFile(document.file_path)
+
   if (!document) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 10, background: C.bg, borderLeft: `1px solid ${C.border}` }}>
@@ -220,10 +236,14 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
           <ToolBtn onClick={() => setScale(s => Math.max(0.3, s - 0.2))}>−</ToolBtn>
           <span style={{ fontSize: 11, color: C.textMuted, minWidth: 38, textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
           <ToolBtn onClick={() => setScale(s => Math.min(4, s + 0.2))}>+</ToolBtn>
-          <Divider />
-          <ToolBtn onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}>◂</ToolBtn>
-          <span style={{ fontSize: 11, color: C.textMuted, minWidth: 52, textAlign: 'center' }}>{currentPage} / {totalPages}</span>
-          <ToolBtn onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}>▸</ToolBtn>
+          {!isImg && (
+            <>
+              <Divider />
+              <ToolBtn onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}>◂</ToolBtn>
+              <span style={{ fontSize: 11, color: C.textMuted, minWidth: 52, textAlign: 'center' }}>{currentPage} / {totalPages}</span>
+              <ToolBtn onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}>▸</ToolBtn>
+            </>
+          )}
           <Divider />
           <button onClick={() => setShowMemoInput(v => !v)} style={{ padding: '3px 10px', borderRadius: 5, fontSize: 11, cursor: 'pointer', border: `1px solid ${showMemoInput ? C.accent : C.borderLight}`, background: showMemoInput ? C.accentDim : 'transparent', color: showMemoInput ? C.accent : C.textMuted, transition: 'all 0.15s' }}>+ 메모</button>
           <button onClick={() => setShowPanel(v => !v)} style={{ padding: '3px 10px', borderRadius: 5, fontSize: 11, cursor: 'pointer', border: `1px solid ${showPanel ? C.borderLight : C.border}`, background: showPanel ? C.surface : 'transparent', color: showPanel ? C.textMuted : C.textDim, transition: 'all 0.15s', marginLeft: 2 }}>패널</button>
@@ -242,34 +262,49 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
           </div>
         )}
 
-        {/* PDF 캔버스 */}
+        {/* 뷰어 캔버스 / 이미지 */}
         <div style={{ flex: 1, overflow: 'auto', background: C.canvas, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 24 }}>
-          <div
-            ref={pageContainerRef}
-            style={{ position: 'relative', display: 'inline-block', flexShrink: 0 }}
-            onMouseUp={handlePageContainerMouseUp}
-          >
-            <canvas ref={canvasRef} style={{ display: 'block', boxShadow: '0 4px 24px rgba(0,0,0,0.6)', borderRadius: 2 }} />
+          {isImg ? (
+            <img
+              src={fileToUrl(document.file_path)}
+              alt={document.title}
+              style={{
+                width: `${Math.round(700 * scale)}px`,
+                height: 'auto',
+                display: 'block',
+                boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
+                borderRadius: 2,
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <div
+              ref={pageContainerRef}
+              style={{ position: 'relative', display: 'inline-block', flexShrink: 0 }}
+              onMouseUp={handlePageContainerMouseUp}
+            >
+              <canvas ref={canvasRef} style={{ display: 'block', boxShadow: '0 4px 24px rgba(0,0,0,0.6)', borderRadius: 2 }} />
 
-            {/* 하이라이트 레이어 */}
-            <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
-              {pageHighlights.map(h => {
-                const rects: NormalizedRect[] = JSON.parse(h.rects)
-                return rects.map((r, i) => (
-                  <div key={`${h.id}-${i}`} style={{
-                    position: 'absolute',
-                    left: `${r.x * 100}%`, top: `${r.y * 100}%`,
-                    width: `${r.w * 100}%`, height: `${r.h * 100}%`,
-                    background: h.color, opacity: 0.45,
-                    mixBlendMode: 'multiply', borderRadius: 2,
-                  }} />
-                ))
-              })}
+              {/* 하이라이트 레이어 */}
+              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
+                {pageHighlights.map(h => {
+                  const rects: NormalizedRect[] = JSON.parse(h.rects)
+                  return rects.map((r, i) => (
+                    <div key={`${h.id}-${i}`} style={{
+                      position: 'absolute',
+                      left: `${r.x * 100}%`, top: `${r.y * 100}%`,
+                      width: `${r.w * 100}%`, height: `${r.h * 100}%`,
+                      background: h.color, opacity: 0.45,
+                      mixBlendMode: 'multiply', borderRadius: 2,
+                    }} />
+                  ))
+                })}
+              </div>
+
+              {/* 텍스트 레이어 */}
+              <div ref={textLayerRef} className="pdf-text-layer" style={{ zIndex: 2 }} />
             </div>
-
-            {/* 텍스트 레이어 */}
-            <div ref={textLayerRef} className="pdf-text-layer" style={{ zIndex: 2 }} />
-          </div>
+          )}
         </div>
       </div>
 
@@ -278,7 +313,7 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
         <div style={{ width: 220, flexShrink: 0, borderLeft: `1px solid ${C.border}`, background: C.panelBg, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* 탭 */}
           <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-            {(['memo', 'highlight'] as const).map(tab => (
+            {(isImg ? ['memo'] as const : ['memo', 'highlight'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)} style={{
                 flex: 1, height: 36, border: 'none', cursor: 'pointer', fontSize: 11,
                 background: activeTab === tab ? C.surface : 'transparent',
@@ -349,7 +384,7 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
       )}
 
       {/* 형광펜 색 선택 팝업 */}
-      {selectionPopup && (
+      {!isImg && selectionPopup && (
         <div
           style={{ position: 'fixed', left: selectionPopup.x - 8, top: selectionPopup.y - 46, zIndex: 99999, background: '#22222a', border: '1px solid #3a3a48', borderRadius: 10, padding: '6px 10px', display: 'flex', gap: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.6)' }}
           onMouseDown={e => e.stopPropagation()}

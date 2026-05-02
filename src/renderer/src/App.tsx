@@ -6,6 +6,10 @@ import Settings from './components/Settings'
 import { Document, Folder, Tag } from './types'
 import './assets/main.css'
 
+function isSupportedFile(name: string): boolean {
+  return /\.(pdf|jpg|jpeg|png|gif|bmp|webp)$/i.test(name)
+}
+
 function App(): React.ReactElement {
   const [folders, setFolders] = useState<Folder[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -204,7 +208,7 @@ function App(): React.ReactElement {
     const files: string[] = []
     for (let i = 0; i < e.dataTransfer.files.length; i++) {
       const f = e.dataTransfer.files[i]
-      if (f.name.toLowerCase().endsWith('.pdf')) {
+      if (isSupportedFile(f.name)) {
         const filePath = window.api.getPathForFile(f)
         if (filePath) files.push(filePath)
       }
@@ -306,7 +310,7 @@ function App(): React.ReactElement {
                 ? `${folders.find(f => f.id === selectedFolderId)?.name} 에 추가`
                 : '전체 문서에 추가'}
             </div>
-            <div style={{ fontSize: 11, color: '#4a4a5a' }}>PDF 파일을 놓으세요</div>
+            <div style={{ fontSize: 11, color: '#4a4a5a' }}>PDF 또는 이미지 파일을 놓으세요</div>
           </div>
         </div>
       )}

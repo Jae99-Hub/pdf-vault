@@ -126,7 +126,7 @@ export default function Sidebar({
     const files: string[] = []
     for (let i = 0; i < e.dataTransfer.files.length; i++) {
       const f = e.dataTransfer.files[i]
-      if (f.name.toLowerCase().endsWith('.pdf')) {
+      if (/\.(pdf|jpg|jpeg|png|gif|bmp|webp)$/i.test(f.name)) {
         const path = window.api.getPathForFile(f)
         if (path) files.push(path)
       }
@@ -294,7 +294,7 @@ export default function Sidebar({
           style={{ width: '100%', padding: '8px', background: 'linear-gradient(135deg, #1a5fa8, #2577c8)', border: 'none', borderRadius: 7, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600, letterSpacing: '0.02em', transition: 'opacity 0.15s', boxShadow: '0 2px 8px rgba(77,148,232,0.25)' }}
           onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
           onMouseLeave={e => e.currentTarget.style.opacity = '1'}
-        >＋ PDF 추가</button>
+        >＋ 파일 추가</button>
       </div>
 
       <div style={{ overflowY: 'auto', flex: 1 }}>

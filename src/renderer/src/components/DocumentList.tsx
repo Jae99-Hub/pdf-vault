@@ -231,7 +231,7 @@ export default function DocumentList({
           <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted }}>
             <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.4 }}>📄</div>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>문서가 없습니다</div>
-            <div style={{ fontSize: 11, opacity: 0.7 }}>PDF를 드래그하거나 추가 버튼을 눌러주세요</div>
+            <div style={{ fontSize: 11, opacity: 0.7 }}>PDF 또는 이미지를 드래그하거나 추가 버튼을 눌러주세요</div>
           </div>
         )}
         {sortedDocs().map((doc) => {
@@ -280,7 +280,7 @@ export default function DocumentList({
                       {isSelected && <span style={{ color: '#fff', fontSize: 10 }}>✓</span>}
                     </div>
                   )}
-                  <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>📄</span>
+                  <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>{/\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(doc.file_path) ? '🖼️' : '📄'}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 500, color: isSelected ? '#a0c4ff' : isActive ? '#c8dcf8' : C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: 4, lineHeight: 1.4 }}>
                       {doc.title}
