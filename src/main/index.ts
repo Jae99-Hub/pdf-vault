@@ -4,8 +4,9 @@ import { join, basename, dirname, sep, extname } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Database from 'better-sqlite3'
 import fs from 'fs'
+import chokidar, { FSWatcher } from 'chokidar'
 
-const DB_PATH = join(app.getPath('userData'), 'pdf-vault.db')
+const DB_PATH = join(app.getPath('userData'), 'foldry.db')
 const SETTINGS_PATH = join(app.getPath('userData'), 'settings.json')
 let db: Database.Database
 
@@ -112,12 +113,12 @@ function uniquePath(dir: string, title: string, ext: string, avoid?: string): st
 }
 
 // Copy srcPath into the vault at folderId; returns new vault path or null
-function copyToVault(srcPath: string, title: string, folderId: number | null): string | null {
+async function copyToVault(srcPath: string, title: string, folderId: number | null): Promise<string | null> {
   const dir = ensureVaultDir(folderId)
   if (!dir) return null
   const ext = extname(srcPath).toLowerCase() || '.pdf'
   const dest = uniquePath(dir, title, ext, srcPath)
-  if (dest !== srcPath) fs.copyFileSync(srcPath, dest)
+  if (dest !== srcPath) await fs.promises.copyFile(srcPath, dest)
   return dest
 }
 
@@ -135,7 +136,7 @@ function collectDocsInSubtree(folderId: number): { id: number; file_path: string
 
 // ── Vault watcher ─────────────────────────────────────────────────────────────
 
-let vaultWatcher: fs.FSWatcher | null = null
+let vaultWatcher: FSWatcher | null = null
 
 function stopVaultWatcher(): void {
   if (vaultWatcher) { vaultWatcher.close(); vaultWatcher = null }
@@ -143,11 +144,12 @@ function stopVaultWatcher(): void {
 
 function getFolderIdFromVaultPath(filePath: string): number | null {
   if (!settings.vaultPath) return null
-  const dir = dirname(filePath)
-  if (dir === settings.vaultPath) return null
-  const rel = dir.slice(settings.vaultPath.length).replace(/^[/\\]/, '')
+  const normDir = normalizePath(dirname(filePath))
+  const normVault = normalizePath(settings.vaultPath)
+  if (normDir === normVault) return null
+  const rel = normDir.startsWith(normVault) ? normDir.slice(normVault.length).replace(/^\//, '') : ''
   if (!rel) return null
-  const parts = rel.split(/[/\\]/).filter(Boolean)
+  const parts = rel.split('/').filter(Boolean)
   let parentId: number | null = null
   for (const part of parts) {
     const folder = (parentId === null
@@ -160,14 +162,118 @@ function getFolderIdFromVaultPath(filePath: string): number | null {
   return parentId
 }
 
-function syncExternalFileChange(fullPath: string, win: BrowserWindow): void {
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+function syncExternalFolderCreated(dirPath: string, win: BrowserWindow): void {
   if (!settings.vaultPath) return
+  const normDir = normalizePath(dirPath)
+  const normVault = normalizePath(settings.vaultPath)
+  const rel = normDir.startsWith(normVault) ? normDir.slice(normVault.length).replace(/^\//, '') : ''
+  if (!rel) return
+  const parts = rel.split('/').filter(Boolean)
+  const folderName = parts[parts.length - 1]
+
+  let parentId: number | null = null
+  for (const part of parts.slice(0, -1)) {
+    const row = (parentId === null
+      ? db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id IS NULL').get(part)
+      : db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id = ?').get(part, parentId)
+    ) as { id: number } | undefined
+    if (!row) return
+    parentId = row.id
+  }
+
+  const existing = (parentId === null
+    ? db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id IS NULL').get(folderName)
+    : db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id = ?').get(folderName, parentId)
+  ) as { id: number } | undefined
+
+  if (!existing) {
+    db.prepare('INSERT INTO folders (name, parent_id) VALUES (?, ?)').run(folderName, parentId)
+    win.webContents.send('vault-file-changed')
+  }
+}
+
+function walkVault(dir: string): string[] {
+  const results: string[] = []
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) results.push(...walkVault(full))
+      else if (isSupportedFile(entry.name)) results.push(full)
+    }
+  } catch { /* skip unreadable dirs */ }
+  return results
+}
+
+function findFileInVault(dir: string, filename: string): string | null {
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        const found = findFileInVault(full, filename)
+        if (found) return found
+      } else if (entry.name === filename) return full
+    }
+  } catch { /* skip */ }
+  return null
+}
+
+function orphanDocsInFolder(folderId: number): void {
+  db.prepare('UPDATE documents SET folder_id = NULL WHERE folder_id = ?').run(folderId)
+  const subs = db.prepare('SELECT id FROM folders WHERE parent_id = ?').all(folderId) as { id: number }[]
+  for (const s of subs) {
+    orphanDocsInFolder(s.id)
+    db.prepare('DELETE FROM folders WHERE id = ?').run(s.id)
+  }
+}
+
+function syncExternalFolderDeleted(dirPath: string, win: BrowserWindow): void {
+  if (!settings.vaultPath) return
+  const normDir = normalizePath(dirPath)
+  const normVault = normalizePath(settings.vaultPath)
+  const rel = normDir.startsWith(normVault) ? normDir.slice(normVault.length).replace(/^\//, '') : ''
+  if (!rel) return
+  const parts = rel.split('/').filter(Boolean)
+
+  let folderId: number | null = null
+  for (const part of parts) {
+    const row = (folderId === null
+      ? db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id IS NULL').get(part)
+      : db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id = ?').get(part, folderId)
+    ) as { id: number } | undefined
+    if (!row) return
+    folderId = row.id
+  }
+  if (folderId === null) return
+
+  const folder = db.prepare('SELECT type_key FROM folders WHERE id = ?').get(folderId) as { type_key: string | null } | undefined
+  if (folder?.type_key) return  // never delete system folders
+
+  orphanDocsInFolder(folderId)
+  db.prepare('DELETE FROM folders WHERE id = ?').run(folderId)
+  win.webContents.send('vault-file-changed')
+}
+
+function syncExternalFileChange(rawPath: string, win: BrowserWindow): void {
+  if (!settings.vaultPath) return
+  // Normalize to OS-native separators so DB lookups match stored paths
+  const fullPath = join(rawPath)
   if (fs.existsSync(fullPath)) {
+    let stat: fs.Stats
+    try { stat = fs.statSync(fullPath) } catch { return }
+
+    if (stat.isDirectory()) {
+      syncExternalFolderCreated(fullPath, win)
+      return
+    }
+
     if (!isSupportedFile(fullPath)) return
     const existing = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(fullPath) as { id: number } | undefined
     if (!existing) {
       try {
-        const stat = fs.statSync(fullPath)
         const ext = extname(fullPath)
         const title = basename(fullPath, ext)
         const folderId = getFolderIdFromVaultPath(fullPath)
@@ -176,10 +282,12 @@ function syncExternalFileChange(fullPath: string, win: BrowserWindow): void {
       } catch (e) { console.error('sync add error:', e) }
     }
   } else {
-    const existing = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(fullPath) as { id: number } | undefined
-    if (existing) {
-      db.prepare('DELETE FROM documents WHERE id = ?').run(existing.id)
+    const existingDoc = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(fullPath) as { id: number } | undefined
+    if (existingDoc) {
+      db.prepare('DELETE FROM documents WHERE id = ?').run(existingDoc.id)
       win.webContents.send('vault-file-changed')
+    } else {
+      syncExternalFolderDeleted(fullPath, win)
     }
   }
 }
@@ -188,31 +296,33 @@ function startVaultWatcher(win: BrowserWindow): void {
   stopVaultWatcher()
   if (!settings.vaultPath || !fs.existsSync(settings.vaultPath)) return
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
+
+  const schedule = (fullPath: string): void => {
+    if (pending.has(fullPath)) clearTimeout(pending.get(fullPath)!)
+    pending.set(fullPath, setTimeout(() => {
+      pending.delete(fullPath)
+      syncExternalFileChange(fullPath, win)
+    }, 200))
+  }
+
   try {
-    vaultWatcher = fs.watch(settings.vaultPath, { recursive: true }, (_event, filename) => {
-      if (!filename) return
-      const key = filename
-      if (pending.has(key)) clearTimeout(pending.get(key)!)
-      pending.set(key, setTimeout(() => {
-        pending.delete(key)
-        const fullPath = join(settings.vaultPath!, filename)
-        syncExternalFileChange(fullPath, win)
-      }, 500))
+    vaultWatcher = chokidar.watch(settings.vaultPath, {
+      ignoreInitial: true,
+      depth: 10,
+      usePolling: true,
+      interval: 500,
+      awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 200 },
     })
+    vaultWatcher.on('add', schedule)
+    vaultWatcher.on('unlink', schedule)
+    vaultWatcher.on('addDir', schedule)
+    vaultWatcher.on('unlinkDir', schedule)
   } catch (e) {
     console.error('vault watcher error:', e)
   }
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
-
-const SYSTEM_FOLDERS = [
-  { name: 'PDF', type_key: 'pdf' },
-  { name: '이미지', type_key: 'image' },
-  { name: '동영상', type_key: 'video' },
-  { name: '음원', type_key: 'audio' },
-  { name: '문서', type_key: 'doc' },
-]
 
 function initDatabase(): void {
   db = new Database(DB_PATH)
@@ -293,25 +403,8 @@ function initDatabase(): void {
 
 function migrateDatabase(): void {
   try { db.exec('ALTER TABLE folders ADD COLUMN type_key TEXT') } catch {}
-}
-
-function ensureSystemFolders(): void {
-  for (const sf of SYSTEM_FOLDERS) {
-    const existing = db.prepare('SELECT id FROM folders WHERE type_key = ?').get(sf.type_key)
-    if (!existing) {
-      db.prepare('INSERT INTO folders (name, parent_id, type_key) VALUES (?, NULL, ?)').run(sf.name, sf.type_key)
-    }
-  }
-}
-
-function ensureSystemFolderDirs(): void {
-  if (!settings.vaultPath) return
-  for (const sf of SYSTEM_FOLDERS) {
-    const row = db.prepare('SELECT id FROM folders WHERE type_key = ?').get(sf.type_key) as { id: number } | undefined
-    if (row) {
-      try { ensureVaultDir(row.id) } catch (e) { console.error('ensureSystemFolderDirs:', e) }
-    }
-  }
+  // 기존 시스템 폴더를 일반 폴더로 전환
+  db.prepare('UPDATE folders SET type_key = NULL WHERE type_key IS NOT NULL').run()
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -319,6 +412,7 @@ function ensureSystemFolderDirs(): void {
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
     show: false,
+    title: 'Foldry',
     backgroundColor: '#1e1e1e',
     titleBarStyle: 'default',
     webPreferences: {
@@ -346,6 +440,48 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+}
+
+// ── Import helper ─────────────────────────────────────────────────────────────
+
+async function importFiles(srcPaths: string[], folderId: number | null, win?: BrowserWindow): Promise<object[]> {
+  const imported: object[] = []
+  const total = srcPaths.filter(isSupportedFile).length
+  let current = 0
+
+  for (const srcPath of srcPaths) {
+    if (!isSupportedFile(srcPath)) continue
+    current++
+    const filename = basename(srcPath)
+    win?.webContents.send('import-progress', { type: 'copying', filename, current, total })
+    try {
+      const stat = fs.statSync(srcPath)
+      const ext = extname(srcPath)
+      const title = basename(srcPath, ext)
+      const storedPath = settings.vaultPath
+        ? ((await copyToVault(srcPath, title, folderId)) ?? srcPath)
+        : srcPath
+
+      const existing = db.prepare('SELECT id, folder_id FROM documents WHERE file_path = ?')
+        .get(storedPath) as { id: number; folder_id: number | null } | undefined
+
+      if (existing) {
+        if (existing.folder_id !== folderId) {
+          db.prepare('UPDATE documents SET folder_id = ? WHERE id = ?').run(folderId, existing.id)
+        }
+        imported.push({ id: existing.id, title, filePath: storedPath })
+      } else {
+        const info = db.prepare(
+          'INSERT INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)'
+        ).run(title, storedPath, stat.size, folderId)
+        imported.push({ id: info.lastInsertRowid, title, filePath: storedPath })
+      }
+    } catch (e) {
+      console.error('importFiles error:', e)
+    }
+  }
+  win?.webContents.send('import-progress', { type: 'done', total })
+  return imported
 }
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
@@ -396,7 +532,6 @@ function registerIpcHandlers(): void {
     settings.vaultPath = newVaultPath
     saveSettings(settings)
     fs.mkdirSync(newVaultPath, { recursive: true })
-    ensureSystemFolderDirs()
     const win = BrowserWindow.getFocusedWindow()
     if (win) startVaultWatcher(win)
     return newVaultPath
@@ -430,63 +565,38 @@ function registerIpcHandlers(): void {
       ]
     })
     if (result.canceled) return []
-
-    const imported: object[] = []
-    for (const srcPath of result.filePaths) {
-      if (!isSupportedFile(srcPath)) continue
-      try {
-        const stat = fs.statSync(srcPath)
-        const ext = extname(srcPath)
-        const title = basename(srcPath, ext)
-        const storedPath = settings.vaultPath
-          ? (copyToVault(srcPath, title, folderId ?? null) ?? srcPath)
-          : srcPath
-        const stmt = db.prepare(
-          'INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)'
-        )
-        const info = stmt.run(title, storedPath, stat.size, folderId ?? null)
-        imported.push({ id: info.lastInsertRowid, title, filePath: storedPath })
-      } catch (e) {
-        console.error(e)
-      }
-    }
-    return imported
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    return importFiles(result.filePaths, folderId ?? null, win)
   })
 
   // ── Import PDF (paths, e.g. drag-drop) ─────────────────────────────────────
 
   ipcMain.handle('import-pdf-paths', async (_e, filePaths: string[], folderId?: number | null) => {
-    const imported: object[] = []
-    for (const srcPath of filePaths) {
-      if (!isSupportedFile(srcPath)) continue
-      try {
-        const stat = fs.statSync(srcPath)
-        const ext = extname(srcPath)
-        const title = basename(srcPath, ext)
-        const storedPath = settings.vaultPath
-          ? (copyToVault(srcPath, title, folderId ?? null) ?? srcPath)
-          : srcPath
-        const stmt = db.prepare(
-          'INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)'
-        )
-        const info = stmt.run(title, storedPath, stat.size, folderId ?? null)
-        imported.push({ id: info.lastInsertRowid, title, filePath: storedPath })
-      } catch (e) {
-        console.error(e)
-      }
-    }
-    return imported
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    return importFiles(filePaths, folderId ?? null, win)
   })
 
   // ── Documents ───────────────────────────────────────────────────────────────
 
-  ipcMain.handle('get-documents', (_e, folderId?: number) => {
-    if (folderId) {
-      return db
-        .prepare('SELECT * FROM documents WHERE folder_id = ? ORDER BY opened_at DESC, created_at DESC')
-        .all(folderId)
-    }
-    return db.prepare('SELECT * FROM documents ORDER BY opened_at DESC, created_at DESC').all()
+  ipcMain.handle('get-documents', (_e, folderId?: number, options?: {
+    sortBy?: string; view?: string; limit?: number; offset?: number
+  }) => {
+    const { sortBy = 'opened', view, limit = 500, offset = 0 } = options ?? {}
+
+    const orderClause =
+      sortBy === 'title'   ? "title COLLATE NOCASE ASC" :
+      sortBy === 'created' ? "created_at DESC" :
+      sortBy === 'size'    ? "file_size DESC" :
+      sortBy === 'pages'   ? "page_count DESC" :
+      "CASE WHEN opened_at IS NULL THEN 1 ELSE 0 END, opened_at DESC, created_at DESC"
+
+    const where: string[] = []
+    if (folderId)             where.push(`folder_id = ${folderId}`)
+    if (view === 'favorites') where.push('is_favorite = 1')
+    if (view === 'recent')    where.push("opened_at > datetime('now', '-14 days')")
+
+    const whereStr = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    return db.prepare(`SELECT * FROM documents ${whereStr} ORDER BY ${orderClause} LIMIT ? OFFSET ?`).all(limit, offset)
   })
 
   ipcMain.handle('search-documents', (_e, query: string) => {
@@ -674,6 +784,47 @@ function registerIpcHandlers(): void {
     return { id: folderId, name, parent_id: parentId ?? null, type_key: null }
   })
 
+  ipcMain.handle('move-folder', (_e, folderId: number, newParentId: number | null) => {
+    // 순환 참조 방지 (자기 자신이나 자손에게 이동 불가)
+    function isDescendant(id: number | null): boolean {
+      if (id === null) return false
+      if (id === folderId) return true
+      const row = db.prepare('SELECT parent_id FROM folders WHERE id = ?').get(id) as { parent_id: number | null } | undefined
+      return row ? isDescendant(row.parent_id) : false
+    }
+    if (isDescendant(newParentId)) return
+
+    if (settings.vaultPath) {
+      try {
+        const oldRel = getFolderRelPath(folderId)
+        const oldAbs = oldRel ? join(settings.vaultPath, oldRel) : null
+
+        db.prepare('UPDATE folders SET parent_id = ? WHERE id = ?').run(newParentId, folderId)
+
+        const newRel = getFolderRelPath(folderId)
+        const newAbs = newRel ? join(settings.vaultPath, newRel) : null
+
+        if (oldAbs && newAbs && oldAbs !== newAbs && fs.existsSync(oldAbs) && !fs.existsSync(newAbs)) {
+          fs.mkdirSync(dirname(newAbs), { recursive: true })
+          fs.renameSync(oldAbs, newAbs)
+
+          const prefix = oldAbs + sep
+          const docs = db.prepare('SELECT id, file_path FROM documents').all() as { id: number; file_path: string }[]
+          const upd = db.prepare('UPDATE documents SET file_path = ? WHERE id = ?')
+          for (const doc of docs) {
+            if (doc.file_path.startsWith(prefix)) {
+              upd.run(newAbs + sep + doc.file_path.slice(prefix.length), doc.id)
+            }
+          }
+        }
+      } catch (e) {
+        console.error('move-folder error:', e)
+      }
+      return
+    }
+    db.prepare('UPDATE folders SET parent_id = ? WHERE id = ?').run(newParentId, folderId)
+  })
+
   ipcMain.handle('rename-folder', (_e, folderId: number, name: string) => {
     if (settings.vaultPath) {
       try {
@@ -685,7 +836,7 @@ function registerIpcHandlers(): void {
         const newRel = getFolderRelPath(folderId)
         const newAbs = join(settings.vaultPath, newRel)
 
-        if (fs.existsSync(oldAbs)) fs.renameSync(oldAbs, newAbs)
+        if (oldRel && oldAbs !== settings.vaultPath && fs.existsSync(oldAbs)) fs.renameSync(oldAbs, newAbs)
 
         // Update file_path for all documents that lived inside this folder tree
         const prefix = oldAbs + sep
@@ -709,13 +860,14 @@ function registerIpcHandlers(): void {
   ipcMain.handle('delete-folder', (_e, folderId: number) => {
     if (settings.vaultPath) {
       try {
-        const folderAbs = join(settings.vaultPath, getFolderRelPath(folderId))
+        const folderRel = getFolderRelPath(folderId)
+        const folderAbs = folderRel ? join(settings.vaultPath, folderRel) : null
         const docs = collectDocsInSubtree(folderId)
         const upd = db.prepare('UPDATE documents SET file_path = ? WHERE id = ?')
 
-        // Move every PDF in the subtree back to vault root
+        // Move every file in the subtree back to vault root
         for (const doc of docs) {
-          if (doc.file_path.startsWith(settings.vaultPath) && fs.existsSync(doc.file_path)) {
+          if (doc.file_path.startsWith(settings.vaultPath + sep) && fs.existsSync(doc.file_path)) {
             const docExt = extname(doc.file_path) || '.pdf'
             const dest = uniquePath(settings.vaultPath, basename(doc.file_path, docExt), docExt, doc.file_path)
             if (doc.file_path !== dest) fs.renameSync(doc.file_path, dest)
@@ -723,8 +875,10 @@ function registerIpcHandlers(): void {
           }
         }
 
-        // Remove the now-empty folder tree
-        if (fs.existsSync(folderAbs)) fs.rmSync(folderAbs, { recursive: true })
+        // Remove the now-empty folder tree (never touch vault root)
+        if (folderAbs && folderAbs !== settings.vaultPath && fs.existsSync(folderAbs)) {
+          fs.rmSync(folderAbs, { recursive: true })
+        }
       } catch (e) {
         console.error('delete-folder error:', e)
       }
@@ -775,6 +929,58 @@ function registerIpcHandlers(): void {
   ipcMain.handle('open-external-file', (_e, filePath: string) => {
     shell.openPath(filePath)
   })
+
+  ipcMain.handle('repair-vault', async () => {
+    if (!settings.vaultPath) return { fixed: 0, added: 0 }
+    let fixed = 0, added = 0
+
+    // 1) DB에 있지만 파일이 실제로 없는 레코드 → 볼트 전체에서 동일 파일명으로 검색해 경로 수정
+    const allDocs = db.prepare('SELECT id, title, file_path FROM documents').all() as { id: number; title: string; file_path: string }[]
+    for (const doc of allDocs) {
+      if (fs.existsSync(doc.file_path)) continue
+      // 볼트 안에서 같은 파일명 검색
+      const found = findFileInVault(settings.vaultPath, basename(doc.file_path))
+      if (found) {
+        const folderId = getFolderIdFromVaultPath(found)
+        db.prepare('UPDATE documents SET file_path = ?, folder_id = ? WHERE id = ?').run(found, folderId, doc.id)
+        fixed++
+      }
+    }
+
+    // 2) 볼트 안에 있지만 DB에 없는 파일 → 새로 추가
+    const vaultFiles = walkVault(settings.vaultPath)
+    for (const filePath of vaultFiles) {
+      const existing = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(filePath)
+      if (!existing) {
+        try {
+          const stat = fs.statSync(filePath)
+          const ext = extname(filePath)
+          const title = basename(filePath, ext)
+          const folderId = getFolderIdFromVaultPath(filePath)
+          db.prepare('INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)').run(title, filePath, stat.size, folderId)
+          added++
+        } catch { /* skip */ }
+      }
+    }
+
+    return { fixed, added }
+  })
+
+  ipcMain.handle('check-for-updates', () => {
+    if (is.dev) {
+      BrowserWindow.getAllWindows()[0]?.webContents.send('update-status', { type: 'not-available' })
+      return
+    }
+    autoUpdater.checkForUpdates()
+  })
+
+  ipcMain.handle('download-update', () => {
+    autoUpdater.downloadUpdate()
+  })
+
+  ipcMain.handle('install-update', () => {
+    autoUpdater.quitAndInstall()
+  })
 }
 
 // ── Auto updater ─────────────────────────────────────────────────────────────
@@ -802,21 +1008,6 @@ function setupAutoUpdater(win: BrowserWindow): void {
     win.webContents.send('update-status', { type: 'error', message: err.message })
   })
 
-  ipcMain.handle('check-for-updates', () => {
-    if (is.dev) {
-      win.webContents.send('update-status', { type: 'not-available' })
-      return
-    }
-    autoUpdater.checkForUpdates()
-  })
-
-  ipcMain.handle('download-update', () => {
-    autoUpdater.downloadUpdate()
-  })
-
-  ipcMain.handle('install-update', () => {
-    autoUpdater.quitAndInstall()
-  })
 }
 
 // ── Application menu (Korean) ─────────────────────────────────────────────────
@@ -917,12 +1108,12 @@ function buildMenu(): void {
       label: '도움말',
       submenu: [
         {
-          label: 'PDF Vault 정보',
+          label: 'Foldry 정보',
           click: () => {
             dialog.showMessageBox({
               type: 'info',
-              title: 'PDF Vault 정보',
-              message: 'PDF Vault',
+              title: 'Foldry 정보',
+              message: 'Foldry',
               detail: `버전: ${app.getVersion()}\nElectron: ${process.versions.electron}\nNode: ${process.versions.node}`
             })
           }
@@ -937,7 +1128,7 @@ function buildMenu(): void {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.pdfvault')
+  electronApp.setAppUserModelId('com.foldry')
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
@@ -945,8 +1136,6 @@ app.whenReady().then(() => {
   settings = loadSettings()
   initDatabase()
   migrateDatabase()
-  ensureSystemFolders()
-  ensureSystemFolderDirs()
   registerIpcHandlers()
   buildMenu()
   createWindow()

@@ -14,6 +14,8 @@ export default function Settings({ isFirstTime, onClose }: Props): React.ReactEl
   const [loading, setLoading] = useState(false)
   const [migrated, setMigrated] = useState(false)
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const [repairStatus, setRepairStatus] = useState<string | null>(null)
+  const [repairing, setRepairing] = useState(false)
   const appVersion = __APP_VERSION__
 
   useEffect(() => {
@@ -38,6 +40,14 @@ export default function Settings({ isFirstTime, onClose }: Props): React.ReactEl
     await window.api.checkForUpdates()
   }
 
+  async function handleRepairVault(): Promise<void> {
+    setRepairing(true)
+    setRepairStatus(null)
+    const result = await window.api.repairVault()
+    setRepairing(false)
+    setRepairStatus(`복구 완료: 경로 수정 ${result.fixed}개, 새로 추가 ${result.added}개`)
+  }
+
   const canClose = !isFirstTime || !!vaultPath
 
   return (
@@ -50,7 +60,7 @@ export default function Settings({ isFirstTime, onClose }: Props): React.ReactEl
         {/* 헤더 */}
         <div style={{ marginBottom: 24 }}>
           <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 6 }}>
-            {isFirstTime ? 'PDF Vault 초기 설정' : '설정'}
+            {isFirstTime ? 'Foldry 초기 설정' : '설정'}
           </div>
           {isFirstTime && (
             <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.7 }}>
@@ -110,6 +120,33 @@ export default function Settings({ isFirstTime, onClose }: Props): React.ReactEl
                   </button>
                 ))}
               </div>
+            </div>
+          </>
+        )}
+
+        {/* 볼트 복구 — 초기 설정 화면에서는 숨김 */}
+        {!isFirstTime && (
+          <>
+            <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 22 }} />
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                볼트 복구
+              </div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
+                앱에서 보이지 않는 파일이 있거나 경로가 깨진 경우 복구합니다.
+              </div>
+              <button
+                onClick={handleRepairVault}
+                disabled={repairing}
+                style={{ padding: '7px 16px', background: 'transparent', border: `1px solid ${C.borderLight}`, borderRadius: 7, color: repairing ? C.textDim : C.textMuted, fontSize: 12, cursor: repairing ? 'default' : 'pointer', transition: 'all 0.15s' }}
+                onMouseEnter={e => { if (!repairing) { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.text } }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = C.borderLight; e.currentTarget.style.color = C.textMuted }}
+              >
+                {repairing ? '복구 중...' : '볼트 스캔 & 복구'}
+              </button>
+              {repairStatus && (
+                <div style={{ marginTop: 10, fontSize: 12, color: C.success }}>{repairStatus}</div>
+              )}
             </div>
           </>
         )}

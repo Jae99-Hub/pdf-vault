@@ -1,7 +1,7 @@
 {
-  "name": "pdf-vault",
-  "version": "1.4.1",
-  "description": "An Electron application with React and TypeScript",
+  "name": "foldry",
+  "version": "2.1.0",
+  "description": "Foldry — Your personal file vault",
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
@@ -22,9 +22,9 @@
     "package": "npm run build && electron-builder --win"
   },
   "build": {
-    "appId": "com.pdfvault.app",
-    "productName": "PDF Vault",
-    "copyright": "Copyright © 2025 PDF Vault",
+    "appId": "com.foldry.app",
+    "productName": "Foldry",
+    "copyright": "Copyright © 2025 Foldry",
     "directories": {
       "buildResources": "build",
       "output": "dist"
@@ -61,13 +61,14 @@
       "language": "1042",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "PDF Vault"
+      "shortcutName": "Foldry"
     }
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "better-sqlite3": "^12.9.0",
+    "chokidar": "^5.0.0",
     "electron-updater": "^6.8.3",
     "pdfjs-dist": "^3.11.174"
   },

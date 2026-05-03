@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PDF Vault — 나만의 파일 보관함</title>
+  <title>Foldry — 나만의 파일 보관함</title>
   <meta name="description" content="PDF, 이미지, 동영상, 음원, 문서를 하나의 앱으로. 자유로운 폴더 분류, 태그, 즐겨찾기까지." />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -258,7 +258,7 @@
 
 <!-- Nav -->
 <nav>
-  <a class="nav-logo" href="#">📄 PDF <span>Vault</span></a>
+  <a class="nav-logo" href="#">📁 <span>Foldry</span></a>
   <div class="nav-links">
     <a href="#features">기능</a>
     <a href="#download">다운로드</a>
@@ -270,7 +270,7 @@
 <!-- Hero -->
 <section class="hero">
   <div class="hero-badge">🪟 Windows 전용 · 무료</div>
-  <h1>나만의 <em>파일 보관함</em>,<br>PDF Vault</h1>
+  <h1>나만의 <em>파일 보관함</em>,<br>Foldry</h1>
   <p>PDF, 이미지, 동영상, 음원, 문서를 한 곳에서 관리하세요.<br>폴더와 태그로 자유롭게 분류하고 빠르게 검색할 수 있습니다.</p>
   <div class="hero-btns">
     <a class="btn-primary" href="#download">⬇ 지금 다운로드</a>
@@ -286,7 +286,7 @@
       <div class="dot dot-r"></div>
       <div class="dot dot-y"></div>
       <div class="dot dot-g"></div>
-      <span class="preview-titlebar-name">PDF Vault</span>
+      <span class="preview-titlebar-name">Foldry</span>
     </div>
     <div class="preview-body">
       <div class="preview-sidebar">
@@ -402,13 +402,13 @@
 
 <!-- Footer -->
 <footer>
-  <div class="logo">📄 PDF <span>Vault</span></div>
+  <div class="logo">📁 <span>Foldry</span></div>
   <div class="links">
     <a href="https://github.com/Jae99-Hub/pdf-vault" target="_blank">GitHub</a>
     <a href="https://github.com/Jae99-Hub/pdf-vault/releases" target="_blank">릴리즈 노트</a>
     <a href="https://github.com/Jae99-Hub/pdf-vault/issues" target="_blank">버그 제보</a>
   </div>
-  <div class="copy">© 2025 PDF Vault. Free & Open Source.</div>
+  <div class="copy">© 2025 Foldry. Free & Open Source.</div>
 </footer>
 
 <script>
@@ -416,7 +416,7 @@
   fetch('https://api.github.com/repos/Jae99-Hub/pdf-vault/releases/latest')
     .then(r => r.json())
     .then(data => {
-      const tag = data.tag_name || 'v2.0.8'
+      const tag = data.tag_name || 'v2.1.0'
       document.getElementById('version-tag').textContent = '최신 버전 ' + tag
       const asset = data.assets?.find(a => a.name.endsWith('.exe'))
       if (asset) {
@@ -424,7 +424,7 @@
       }
     })
     .catch(() => {
-      document.getElementById('version-tag').textContent = '최신 버전 v2.0.8'
+      document.getElementById('version-tag').textContent = '최신 버전 v2.1.0'
     })
 </script>
 

@@ -15,13 +15,13 @@ const ThemeContext = createContext<ThemeContextValue>({
 
 export function ThemeProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [mode, setMode] = useState<ThemeMode>(() => {
-    return (localStorage.getItem('pdf-vault-theme') as ThemeMode) ?? 'dark'
+    return (localStorage.getItem('foldry-theme') as ThemeMode) ?? 'dark'
   })
 
   const toggle = useCallback(() => {
     setMode(m => {
       const next = m === 'dark' ? 'light' : 'dark'
-      localStorage.setItem('pdf-vault-theme', next)
+      localStorage.setItem('foldry-theme', next)
       return next
     })
   }, [])
