@@ -235,7 +235,7 @@ export default function Sidebar({
             display: 'flex', alignItems: 'center',
             paddingLeft: 10 + depth * 16, paddingRight: 10,
             paddingTop: 5, paddingBottom: 5,
-            margin: '1px 8px', borderRadius: 6, cursor: 'grab',
+            margin: '1px 8px', borderRadius: 6, cursor: 'pointer',
             fontSize: 12, userSelect: 'none',
             opacity: isFolderDragging ? 0.4 : 1,
             background: isDrop ? C.dropHover : isSelected ? C.active : 'transparent',
