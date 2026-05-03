@@ -304,6 +304,16 @@ function ensureSystemFolders(): void {
   }
 }
 
+function ensureSystemFolderDirs(): void {
+  if (!settings.vaultPath) return
+  for (const sf of SYSTEM_FOLDERS) {
+    const row = db.prepare('SELECT id FROM folders WHERE type_key = ?').get(sf.type_key) as { id: number } | undefined
+    if (row) {
+      try { ensureVaultDir(row.id) } catch (e) { console.error('ensureSystemFolderDirs:', e) }
+    }
+  }
+}
+
 // ── Window ────────────────────────────────────────────────────────────────────
 
 function createWindow(): void {
@@ -386,6 +396,7 @@ function registerIpcHandlers(): void {
     settings.vaultPath = newVaultPath
     saveSettings(settings)
     fs.mkdirSync(newVaultPath, { recursive: true })
+    ensureSystemFolderDirs()
     const win = BrowserWindow.getFocusedWindow()
     if (win) startVaultWatcher(win)
     return newVaultPath
@@ -406,7 +417,7 @@ function registerIpcHandlers(): void {
 
   // ── Import PDF (dialog) ─────────────────────────────────────────────────────
 
-  ipcMain.handle('import-pdf', async () => {
+  ipcMain.handle('import-pdf', async (_e, folderId?: number | null) => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
@@ -428,12 +439,12 @@ function registerIpcHandlers(): void {
         const ext = extname(srcPath)
         const title = basename(srcPath, ext)
         const storedPath = settings.vaultPath
-          ? (copyToVault(srcPath, title, null) ?? srcPath)
+          ? (copyToVault(srcPath, title, folderId ?? null) ?? srcPath)
           : srcPath
         const stmt = db.prepare(
-          'INSERT OR IGNORE INTO documents (title, file_path, file_size) VALUES (?, ?, ?)'
+          'INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)'
         )
-        const info = stmt.run(title, storedPath, stat.size)
+        const info = stmt.run(title, storedPath, stat.size, folderId ?? null)
         imported.push({ id: info.lastInsertRowid, title, filePath: storedPath })
       } catch (e) {
         console.error(e)
@@ -935,6 +946,7 @@ app.whenReady().then(() => {
   initDatabase()
   migrateDatabase()
   ensureSystemFolders()
+  ensureSystemFolderDirs()
   registerIpcHandlers()
   buildMenu()
   createWindow()

@@ -22,6 +22,7 @@ function App(): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState('')
   const [view, setView] = useState<'all' | 'favorites' | 'recent'>('all')
   const [draggingDoc, setDraggingDoc] = useState<Document | null>(null)
+  const [draggingDocs, setDraggingDocs] = useState<Document[]>([])
   const [reloadTrigger, setReloadTrigger] = useState(0)
   const [isDroppingFile, setIsDroppingFile] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -49,6 +50,7 @@ function App(): React.ReactElement {
       dragCountRef.current = 0
       setIsDroppingFile(false)
       setDraggingDoc(null)
+      setDraggingDocs([])
     }
     window.addEventListener('dragend', resetDrag)
     window.addEventListener('drop', resetDrag)
@@ -79,7 +81,12 @@ function App(): React.ReactElement {
   }, [selectedFolderId, selectedTagIds, view, reloadTrigger])
 
   async function handleImport(): Promise<void> {
-    await window.api.importPdf()
+    let targetFolderId: number | null = selectedFolderId ?? null
+    if (!targetFolderId && selectedFileType) {
+      const sf = folders.find(f => f.type_key === selectedFileType)
+      if (sf) targetFolderId = sf.id
+    }
+    await window.api.importPdf(targetFolderId)
     reload()
   }
 
@@ -119,9 +126,11 @@ function App(): React.ReactElement {
   }
 
   async function handleDropToFolder(folderId: number | null): Promise<void> {
-    if (!draggingDoc) return
-    await window.api.moveDocument(draggingDoc.id, folderId)
+    const docs = draggingDocs.length > 0 ? draggingDocs : (draggingDoc ? [draggingDoc] : [])
+    if (docs.length === 0) return
+    for (const doc of docs) await window.api.moveDocument(doc.id, folderId)
     setDraggingDoc(null)
+    setDraggingDocs([])
     reload()
   }
 
@@ -277,7 +286,7 @@ function App(): React.ReactElement {
         onSelectDoc={handleSelectDoc}
         onToggleFavorite={handleToggleFavorite}
         onMoveDocument={handleMoveDocument}
-        onDragStart={(doc) => setDraggingDoc(doc)}
+        onDragStart={(doc, docs) => { setDraggingDoc(doc); setDraggingDocs(docs) }}
         onDeleteDocument={handleDeleteDocument}
         onRenameDocument={handleRenameDocument}
         onBulkDelete={handleBulkDelete}

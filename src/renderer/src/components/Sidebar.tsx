@@ -117,6 +117,13 @@ export default function Sidebar({
   const [addingSubInFolderId, setAddingSubInFolderId] = useState<number | null>(null)
   const [addingSubName, setAddingSubName] = useState('')
 
+  React.useEffect(() => {
+    if (!contextMenu) return
+    const close = (): void => setContextMenu(null)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [contextMenu])
+
   function toggleExpand(folderId: number, e: React.MouseEvent): void {
     e.stopPropagation()
     const next = new Set(expandedIds)
@@ -550,9 +557,15 @@ export default function Sidebar({
 
       {/* 컨텍스트 메뉴 */}
       {contextMenu && (() => {
-        const menuTop = Math.min(contextMenu.y, window.innerHeight - 200)
-        const menuLeft = Math.min(contextMenu.x, window.innerWidth - 210)
         const isSystem = contextMenu.isSystem
+        const itemCount = contextMenu.type === 'folder'
+          ? (isSystem ? 1 : 3)
+          : 2
+        const estimated = 16 + itemCount * 36
+        const menuTop = contextMenu.y + estimated > window.innerHeight - 10
+          ? Math.max(10, contextMenu.y - estimated)
+          : contextMenu.y
+        const menuLeft = Math.min(contextMenu.x, window.innerWidth - 172)
         const items = contextMenu.type === 'folder'
           ? [
               ...(!isSystem ? [{ label: '✏️ 이름 수정', action: () => { setRenamingFolderId(contextMenu.id); setRenamingFolderText(contextMenu.name); setContextMenu(null) }, color: '#d0d0da' }] : []),

@@ -64,7 +64,7 @@ export interface ApiType {
   showItemInFolder: (filePath: string) => Promise<void>
   updatePageCount: (documentId: number, pageCount: number) => Promise<void>
   indexPdfContent: (documentId: number, content: string) => Promise<void>
-  importPdf: () => Promise<{ id: number; title: string; filePath: string }[]>
+  importPdf: (folderId?: number | null) => Promise<{ id: number; title: string; filePath: string }[]>
   getDocuments: (folderId?: number) => Promise<Document[]>
   getFolders: () => Promise<Folder[]>
   createFolder: (name: string, parentId?: number) => Promise<Folder>

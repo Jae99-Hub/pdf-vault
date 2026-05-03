@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld('api', {
   showItemInFolder: (filePath: string) => ipcRenderer.invoke('show-item-in-folder', filePath),
   updatePageCount: (documentId: number, pageCount: number) => ipcRenderer.invoke('update-page-count', documentId, pageCount),
   indexPdfContent: (documentId: number, content: string) => ipcRenderer.invoke('index-pdf-content', documentId, content),
-  importPdf: () => ipcRenderer.invoke('import-pdf'),
+  importPdf: (folderId?: number | null) => ipcRenderer.invoke('import-pdf', folderId),
   getDocuments: (folderId?: number) => ipcRenderer.invoke('get-documents', folderId),
   getFolders: () => ipcRenderer.invoke('get-folders'),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

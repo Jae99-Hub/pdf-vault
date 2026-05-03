@@ -20,7 +20,7 @@ interface Props {
   onSelectDoc: (doc: Document) => void
   onToggleFavorite: (doc: Document) => void
   onMoveDocument: (doc: Document, folderId: number | null) => void
-  onDragStart: (doc: Document) => void
+  onDragStart: (doc: Document, selectedDocs: Document[]) => void
   onDeleteDocument: (doc: Document) => void
   onRenameDocument: (doc: Document, title: string) => void
   onBulkDelete: (docs: Document[]) => void
@@ -33,6 +33,48 @@ const FILE_TYPE_PATTERNS: Record<string, RegExp> = {
   video: /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i,
   audio: /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i,
   doc: /\.(txt|md|docx|hwp)$/i,
+}
+
+const TYPE_ICONS: Record<string, string> = {
+  pdf: '📄', image: '🖼️', video: '🎬', audio: '🎵', doc: '📝',
+}
+const SYSTEM_TYPE_ORDER = ['pdf', 'image', 'video', 'audio', 'doc']
+
+
+interface MoveItem { id: number | null; icon: string; name: string; indent: number }
+
+function buildMoveItems(folders: Folder[]): MoveItem[] {
+  const items: MoveItem[] = [{ id: null, icon: '📂', name: '분류 없음', indent: 0 }]
+
+  function addChildren(parentId: number, indent: number): void {
+    folders
+      .filter(f => f.parent_id === parentId && !f.type_key)
+      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
+      .forEach(f => { items.push({ id: f.id, icon: '📁', name: f.name, indent }); addChildren(f.id, indent + 1) })
+  }
+
+  for (const key of SYSTEM_TYPE_ORDER) {
+    const sf = folders.find(f => f.type_key === key)
+    if (!sf) continue
+    items.push({ id: sf.id, icon: TYPE_ICONS[key], name: sf.name, indent: 0 })
+    addChildren(sf.id, 1)
+  }
+
+  // 기타 폴더 (최상위, 유형 없음)
+  const orphans = folders.filter(f => !f.type_key && f.parent_id === null)
+    .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
+  orphans.forEach(f => { items.push({ id: f.id, icon: '📁', name: f.name, indent: 0 }); addChildren(f.id, 1) })
+
+  return items
+}
+
+function calcMenuTop(clickY: number, estimatedHeight: number): number {
+  const wouldExceed = clickY + estimatedHeight > window.innerHeight - 10
+  return wouldExceed ? Math.max(10, clickY - estimatedHeight) : clickY
+}
+
+function calcMenuLeft(clickX: number, menuWidth: number): number {
+  return Math.min(clickX, window.innerWidth - menuWidth - 8)
 }
 
 
@@ -75,6 +117,13 @@ export default function DocumentList({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
   const [showBulkMoveMenu, setShowBulkMoveMenu] = useState(false)
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = (): void => { setContextMenu(null); setTagMenuDoc(null) }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [contextMenu])
 
   useEffect(() => {
     if (tagMenuDoc) loadDocTags(tagMenuDoc.id)
@@ -122,8 +171,20 @@ export default function DocumentList({
   }
 
   function handleDragStart(e: React.DragEvent, doc: Document): void {
-    setDraggingDoc(doc); onDragStart(doc)
+    const isSelected = selectedIds.has(doc.id)
+    const docsToMove = isSelected ? documents.filter(d => selectedIds.has(d.id)) : [doc]
+    setDraggingDoc(doc)
+    onDragStart(doc, docsToMove)
     e.dataTransfer.effectAllowed = 'move'
+
+    if (docsToMove.length > 1) {
+      const ghost = window.document.createElement('div')
+      ghost.style.cssText = 'position:fixed;top:-100px;background:#2577c8;color:#fff;padding:6px 14px;border-radius:7px;font-size:12px;font-weight:600;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,0.4)'
+      ghost.textContent = `📄 ${docsToMove.length}개 이동`
+      window.document.body.appendChild(ghost)
+      e.dataTransfer.setDragImage(ghost, -12, -12)
+      setTimeout(() => window.document.body.removeChild(ghost), 0)
+    }
   }
 
   function handleDelete(doc: Document): void {
@@ -211,12 +272,12 @@ export default function DocumentList({
             {showBulkMoveMenu && (
               <div style={{ position: 'absolute', top: 28, left: 0, background: C.contextMenuBg, border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 156, boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}
                 onClick={e => e.stopPropagation()}>
-                {[{ id: null as number | null, name: '📂 분류 없음' }, ...folders.map(f => ({ id: f.id, name: `📁 ${f.name}` }))].map(item => (
+                {buildMoveItems(folders).map(item => (
                   <div key={item.id ?? 'none'} onClick={() => handleBulkMove(item.id)}
-                    style={{ padding: '8px 14px', fontSize: 12, color: C.text, cursor: 'pointer', transition: 'background 0.1s' }}
+                    style={{ padding: '8px 14px', fontSize: 12, color: C.text, cursor: 'pointer', transition: 'background 0.1s', paddingLeft: 14 + item.indent * 14 }}
                     onMouseEnter={e => e.currentTarget.style.background = C.listHover}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                  >{item.name}</div>
+                  >{item.icon} {item.name}</div>
                 ))}
               </div>
             )}
@@ -347,10 +408,12 @@ export default function DocumentList({
 
       {/* 우클릭 메뉴 */}
       {contextMenu && (() => {
-        const menuTop = Math.min(contextMenu.y, window.innerHeight - 280)
-        const menuLeft = Math.min(contextMenu.x, window.innerWidth - 210)
+        const ITEM_H = 34
+        const estimated = 108 + (folders.length + 1) * ITEM_H
+        const menuTop = calcMenuTop(contextMenu.y, estimated)
+        const menuLeft = calcMenuLeft(contextMenu.x, 196)
         return (
-        <div style={{ position: 'fixed', top: menuTop, left: menuLeft, background: C.contextMenuBg, border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 188, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}
+        <div style={{ position: 'fixed', top: menuTop, left: menuLeft, background: C.contextMenuBg, border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 196, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}
           onClick={(e) => e.stopPropagation()}>
           <div style={{ padding: '4px 0' }}>
             {[
@@ -363,12 +426,12 @@ export default function DocumentList({
               >{label}</div>
             ))}
             <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0', padding: '4px 14px 2px', fontSize: 10, color: C.textDim, fontWeight: 500 }}>폴더로 이동</div>
-            {[{ id: null as number | null, name: '📂 분류 없음' }, ...folders.map(f => ({ id: f.id, name: `📁 ${f.name}` }))].map(item => (
+            {buildMoveItems(folders).map(item => (
               <div key={item.id ?? 'none'} onClick={() => { onMoveDocument(contextMenu.doc, item.id); setContextMenu(null) }}
-                style={{ ...menuItemStyle, color: C.text }}
+                style={{ ...menuItemStyle, color: C.text, paddingLeft: 14 + item.indent * 14 }}
                 onMouseEnter={e => e.currentTarget.style.background = C.listHover}
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >{item.name}</div>
+              >{item.icon} {item.name}</div>
             ))}
             <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 4 }}>
               <div onClick={() => handleDelete(contextMenu.doc)}

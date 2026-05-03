@@ -40,7 +40,42 @@ function formatAudioTime(sec: number): string {
 }
 
 function fileToUrl(filePath: string): string {
-  return 'file:///' + filePath.replace(/\\/g, '/')
+  const parts = filePath.replace(/\\/g, '/').split('/')
+  return 'file:///' + parts.map((p, i) =>
+    // Windows drive letter (e.g. "C:") — don't encode
+    (i === 0 && /^[a-zA-Z]:$/.test(p)) ? p : encodeURIComponent(p)
+  ).join('/')
+}
+
+function VideoPlayer({ filePath, title, onOpenExternal, C }: {
+  filePath: string; title: string; onOpenExternal: () => void; C: ReturnType<typeof import('../ThemeContext').useTheme>
+}): React.ReactElement {
+  const [error, setError] = useState(false)
+  const src = fileToUrl(filePath)
+  return (
+    <div style={{ flex: 1, minHeight: 0, background: '#000', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+      {error ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+          <div style={{ fontSize: 48 }}>🎬</div>
+          <div style={{ fontSize: 13, color: '#ccc' }}>{title}</div>
+          <div style={{ fontSize: 11, color: '#888' }}>이 형식은 내장 플레이어에서 재생할 수 없습니다</div>
+          <button onClick={onOpenExternal}
+            style={{ padding: '8px 18px', background: C.accent, border: 'none', borderRadius: 7, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>
+            외부 플레이어로 열기
+          </button>
+        </div>
+      ) : (
+        <video
+          key={src}
+          src={src}
+          controls
+          autoPlay={false}
+          onError={() => setError(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+        />
+      )}
+    </div>
+  )
 }
 
 interface Props {
@@ -293,10 +328,7 @@ export default function PdfViewer({ document, onPageCountUpdate }: Props): React
 
         {/* 뷰어 캔버스 / 이미지 / 동영상 / 음원 / 텍스트 */}
         {isVid && (
-          <div style={{ flex: 1, overflow: 'hidden', background: '#000', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-            <video key={document.file_path} src={fileToUrl(document.file_path)} controls
-              style={{ maxWidth: '100%', maxHeight: '100%' }} />
-          </div>
+          <VideoPlayer filePath={document.file_path} title={document.title} onOpenExternal={() => window.api.openExternalFile(document.file_path)} C={C} />
         )}
         {isAud && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: C.bg, gap: 24 }}>
