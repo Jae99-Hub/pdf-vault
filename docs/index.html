@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Vault — 나만의 파일 보관함</title>
+  <meta name="description" content="PDF, 이미지, 동영상, 음원, 문서를 하나의 앱으로. 자유로운 폴더 분류, 태그, 즐겨찾기까지." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #13131a;
+      --surface: #1c1c26;
+      --card: #22222e;
+      --border: #2e2e3e;
+      --text: #e2e2ee;
+      --muted: #7a7a9a;
+      --accent: #2577c8;
+      --accent2: #1a5fa8;
+      --accent-dim: rgba(37,119,200,0.12);
+      --green: #1d9e75;
+      --radius: 14px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 40px;
+      background: rgba(19,19,26,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo { font-size: 18px; font-weight: 700; color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 8px; }
+    .nav-logo span { color: var(--accent); }
+    .nav-links { display: flex; gap: 28px; }
+    .nav-links a { color: var(--muted); text-decoration: none; font-size: 14px; transition: color 0.15s; }
+    .nav-links a:hover { color: var(--text); }
+    .nav-dl {
+      background: var(--accent); color: #fff; border: none; border-radius: 8px;
+      padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+      text-decoration: none; transition: opacity 0.15s;
+    }
+    .nav-dl:hover { opacity: 0.88; }
+
+    /* ── Hero ── */
+    .hero {
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+      position: relative; overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; top: -200px; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 800px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(37,119,200,0.10) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: var(--accent-dim); border: 1px solid rgba(37,119,200,0.3);
+      border-radius: 20px; padding: 5px 14px; font-size: 12px; color: #6aabf0;
+      margin-bottom: 28px; font-weight: 500;
+    }
+    .hero h1 {
+      font-size: clamp(36px, 6vw, 68px);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: 22px;
+      color: var(--text);
+    }
+    .hero h1 em { font-style: normal; color: var(--accent); }
+    .hero p {
+      font-size: clamp(16px, 2vw, 20px);
+      color: var(--muted);
+      max-width: 560px;
+      margin-bottom: 44px;
+      line-height: 1.7;
+    }
+    .hero-btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: linear-gradient(135deg, var(--accent2), var(--accent));
+      color: #fff; border: none; border-radius: 10px;
+      padding: 14px 30px; font-size: 16px; font-weight: 700;
+      cursor: pointer; text-decoration: none;
+      box-shadow: 0 4px 24px rgba(37,119,200,0.35);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(37,119,200,0.45); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 28px; font-size: 15px;
+      cursor: pointer; text-decoration: none;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .btn-secondary:hover { color: var(--text); border-color: var(--muted); }
+    .hero-meta { margin-top: 22px; font-size: 12px; color: var(--muted); }
+
+    /* ── App preview ── */
+    .preview {
+      max-width: 900px; margin: 0 auto 100px;
+      padding: 0 24px;
+    }
+    .preview-window {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+    }
+    .preview-titlebar {
+      background: #17171f;
+      padding: 12px 16px;
+      display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot-r { background: #ff5f57; }
+    .dot-y { background: #febc2e; }
+    .dot-g { background: #28c840; }
+    .preview-titlebar-name { margin-left: 8px; font-size: 12px; color: var(--muted); }
+    .preview-body {
+      display: flex; min-height: 380px;
+    }
+    .preview-sidebar {
+      width: 190px; flex-shrink: 0;
+      background: #17171f;
+      border-right: 1px solid var(--border);
+      padding: 14px 10px;
+    }
+    .preview-search {
+      background: #22222e; border: 1px solid var(--border); border-radius: 7px;
+      padding: 7px 10px; font-size: 11px; color: var(--muted); margin-bottom: 10px;
+    }
+    .preview-btn {
+      background: linear-gradient(135deg, var(--accent2), var(--accent));
+      color: #fff; border-radius: 7px; padding: 7px; text-align: center;
+      font-size: 11px; font-weight: 600; margin-bottom: 16px;
+    }
+    .preview-section { font-size: 9px; color: #55556a; text-transform: uppercase; letter-spacing: 0.08em; padding: 4px 4px 2px; margin-bottom: 4px; }
+    .preview-item { font-size: 11px; color: var(--muted); padding: 5px 8px; border-radius: 5px; margin-bottom: 2px; }
+    .preview-item.active { background: rgba(37,119,200,0.15); color: #6aabf0; }
+    .preview-divider { height: 1px; background: var(--border); margin: 10px 0; }
+    .preview-folder { font-size: 11px; color: var(--muted); padding: 5px 8px; border-radius: 5px; margin-bottom: 2px; display: flex; align-items: center; gap: 5px; }
+    .preview-list {
+      width: 230px; flex-shrink: 0;
+      border-right: 1px solid var(--border);
+    }
+    .preview-list-header {
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+      font-size: 11px; color: var(--muted); background: var(--surface);
+    }
+    .preview-doc {
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .preview-doc.active { background: rgba(37,119,200,0.1); border-left: 3px solid var(--accent); }
+    .preview-doc:not(.active) { border-left: 3px solid transparent; }
+    .preview-doc-title { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .preview-doc-meta { display: flex; gap: 5px; flex-wrap: wrap; }
+    .preview-badge { font-size: 9px; background: #2a2a38; color: var(--muted); border-radius: 3px; padding: 1px 5px; }
+    .preview-badge.folder { background: rgba(37,119,200,0.15); color: #6aabf0; }
+    .preview-viewer {
+      flex: 1;
+      background: #111118;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 10px;
+    }
+    .preview-viewer-icon { font-size: 48px; opacity: 0.3; }
+    .preview-viewer-text { font-size: 12px; color: var(--muted); }
+
+    /* ── Features ── */
+    .section { padding: 80px 24px; max-width: 1100px; margin: 0 auto; }
+    .section-title { font-size: clamp(26px, 4vw, 38px); font-weight: 800; text-align: center; margin-bottom: 14px; }
+    .section-sub { text-align: center; color: var(--muted); font-size: 16px; margin-bottom: 56px; }
+
+    .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 26px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .feature-card:hover { border-color: rgba(37,119,200,0.4); transform: translateY(-3px); }
+    .feature-icon { font-size: 32px; margin-bottom: 14px; }
+    .feature-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .feature-desc { font-size: 14px; color: var(--muted); line-height: 1.65; }
+
+    /* ── File types ── */
+    .filetypes { padding: 60px 24px; background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .filetypes-inner { max-width: 900px; margin: 0 auto; text-align: center; }
+    .filetypes-title { font-size: 20px; font-weight: 700; margin-bottom: 28px; }
+    .filetypes-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+    .filetype-chip {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 16px; font-size: 13px;
+      display: flex; align-items: center; gap: 7px; color: var(--muted);
+    }
+    .filetype-chip span { color: var(--text); font-weight: 500; }
+
+    /* ── CTA ── */
+    .cta {
+      padding: 100px 24px;
+      text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .cta::before {
+      content: '';
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 600px; height: 600px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(37,119,200,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .cta h2 { font-size: clamp(28px, 4vw, 44px); font-weight: 800; margin-bottom: 16px; }
+    .cta p { color: var(--muted); font-size: 17px; margin-bottom: 40px; }
+    .version-tag { display: inline-block; background: var(--accent-dim); border: 1px solid rgba(37,119,200,0.3); border-radius: 6px; padding: 3px 10px; font-size: 12px; color: #6aabf0; margin-bottom: 20px; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 40px;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 16px;
+    }
+    footer .logo { font-size: 15px; font-weight: 700; color: var(--muted); }
+    footer .logo span { color: var(--accent); }
+    footer a { color: var(--muted); text-decoration: none; font-size: 13px; transition: color 0.15s; }
+    footer a:hover { color: var(--text); }
+    footer .links { display: flex; gap: 24px; }
+    footer .copy { font-size: 12px; color: #444458; }
+
+    @media (max-width: 640px) {
+      nav { padding: 14px 20px; }
+      .nav-links { display: none; }
+      footer { padding: 24px 20px; flex-direction: column; align-items: flex-start; }
+      .preview-sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <a class="nav-logo" href="#">📄 PDF <span>Vault</span></a>
+  <div class="nav-links">
+    <a href="#features">기능</a>
+    <a href="#download">다운로드</a>
+    <a href="https://github.com/Jae99-Hub/pdf-vault" target="_blank">GitHub</a>
+  </div>
+  <a class="nav-dl" href="#download">무료 다운로드</a>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-badge">🪟 Windows 전용 · 무료</div>
+  <h1>나만의 <em>파일 보관함</em>,<br>PDF Vault</h1>
+  <p>PDF, 이미지, 동영상, 음원, 문서를 한 곳에서 관리하세요.<br>폴더와 태그로 자유롭게 분류하고 빠르게 검색할 수 있습니다.</p>
+  <div class="hero-btns">
+    <a class="btn-primary" href="#download">⬇ 지금 다운로드</a>
+    <a class="btn-secondary" href="https://github.com/Jae99-Hub/pdf-vault" target="_blank">GitHub에서 보기</a>
+  </div>
+  <p class="hero-meta">완전 무료 · 광고 없음 · 인터넷 연결 불필요</p>
+</section>
+
+<!-- App Preview -->
+<div class="preview">
+  <div class="preview-window">
+    <div class="preview-titlebar">
+      <div class="dot dot-r"></div>
+      <div class="dot dot-y"></div>
+      <div class="dot dot-g"></div>
+      <span class="preview-titlebar-name">PDF Vault</span>
+    </div>
+    <div class="preview-body">
+      <div class="preview-sidebar">
+        <div class="preview-search">🔍 검색...</div>
+        <div class="preview-btn">＋ 파일 추가</div>
+        <div class="preview-section">라이브러리</div>
+        <div class="preview-item active">📚 전체 문서</div>
+        <div class="preview-item">⭐ 즐겨찾기</div>
+        <div class="preview-item">🕐 최근 열람</div>
+        <div class="preview-divider"></div>
+        <div class="preview-section">폴더</div>
+        <div class="preview-folder">📁 건강</div>
+        <div class="preview-folder">📁 업무</div>
+        <div class="preview-folder">📁 취미</div>
+        <div class="preview-divider"></div>
+        <div class="preview-section">태그</div>
+        <div class="preview-item">🔵 중요</div>
+        <div class="preview-item">🟢 완료</div>
+      </div>
+      <div class="preview-list">
+        <div class="preview-list-header">문서 24개</div>
+        <div class="preview-doc active">
+          <div class="preview-doc-title">📄 2024 건강검진 결과서.pdf</div>
+          <div class="preview-doc-meta"><span class="preview-badge">1.2 MB</span><span class="preview-badge">8p</span><span class="preview-badge folder">📁 건강</span></div>
+        </div>
+        <div class="preview-doc">
+          <div class="preview-doc-title">🖼️ 여권사진.jpg</div>
+          <div class="preview-doc-meta"><span class="preview-badge">320 KB</span></div>
+        </div>
+        <div class="preview-doc">
+          <div class="preview-doc-title">🎬 운동루틴.mp4</div>
+          <div class="preview-doc-meta"><span class="preview-badge">128 MB</span><span class="preview-badge folder">📁 취미</span></div>
+        </div>
+        <div class="preview-doc">
+          <div class="preview-doc-title">📄 근로계약서.pdf</div>
+          <div class="preview-doc-meta"><span class="preview-badge">890 KB</span><span class="preview-badge folder">📁 업무</span></div>
+        </div>
+        <div class="preview-doc">
+          <div class="preview-doc-title">🎵 집중음악.mp3</div>
+          <div class="preview-doc-meta"><span class="preview-badge">8.4 MB</span></div>
+        </div>
+      </div>
+      <div class="preview-viewer">
+        <div class="preview-viewer-icon">📄</div>
+        <div class="preview-viewer-text">클릭하면 바로 미리보기</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Features -->
+<section class="section" id="features">
+  <h2 class="section-title">필요한 기능만, 군더더기 없이</h2>
+  <p class="section-sub">복잡한 설정 없이 바로 쓸 수 있습니다</p>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">📁</div>
+      <div class="feature-title">자유로운 폴더 분류</div>
+      <div class="feature-desc">내가 원하는 방식으로 폴더를 만들고 하위 폴더도 자유롭게 구성할 수 있습니다. 어떤 파일 유형이든 한 폴더에 함께 보관 가능합니다.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔍</div>
+      <div class="feature-title">빠른 전문 검색</div>
+      <div class="feature-desc">파일 제목은 물론 PDF 내부 텍스트까지 검색합니다. 원하는 내용을 순식간에 찾을 수 있습니다.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🏷️</div>
+      <div class="feature-title">태그로 가로 분류</div>
+      <div class="feature-desc">폴더와 별개로 태그를 붙여 여러 폴더에 걸친 파일들을 한번에 모아볼 수 있습니다.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🗄️</div>
+      <div class="feature-title">전용 보관 폴더</div>
+      <div class="feature-desc">볼트 폴더를 지정하면 파일을 자동으로 복사해 안전하게 보관합니다. 원본 파일이 삭제돼도 걱정 없습니다.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">⭐</div>
+      <div class="feature-title">즐겨찾기 & 최근 열람</div>
+      <div class="feature-desc">자주 보는 파일은 즐겨찾기에, 최근 열어본 파일은 자동으로 모아서 빠르게 접근할 수 있습니다.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔄</div>
+      <div class="feature-title">자동 업데이트</div>
+      <div class="feature-desc">새 버전이 출시되면 앱 안에서 바로 알림을 받고 업데이트할 수 있습니다. 항상 최신 상태를 유지하세요.</div>
+    </div>
+  </div>
+</section>
+
+<!-- File Types -->
+<div class="filetypes">
+  <div class="filetypes-inner">
+    <div class="filetypes-title">지원하는 파일 형식</div>
+    <div class="filetypes-grid">
+      <div class="filetype-chip">📄 <span>PDF</span></div>
+      <div class="filetype-chip">🖼️ <span>JPG · PNG · GIF · WebP · BMP</span></div>
+      <div class="filetype-chip">🎬 <span>MP4 · MKV · AVI · MOV · WebM</span></div>
+      <div class="filetype-chip">🎵 <span>MP3 · WAV · FLAC · AAC · M4A</span></div>
+      <div class="filetype-chip">📝 <span>TXT · MD · DOCX · HWP</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Download -->
+<section class="cta" id="download">
+  <div class="version-tag" id="version-tag">최신 버전 확인 중...</div>
+  <h2>지금 바로 시작하세요</h2>
+  <p>완전 무료, 광고 없음, 인터넷 연결 불필요<br>Windows 10/11에서 바로 사용할 수 있습니다</p>
+  <a class="btn-primary" id="download-btn" href="https://github.com/Jae99-Hub/pdf-vault/releases/latest" style="font-size:18px; padding:16px 40px; display:inline-flex;">
+    ⬇ 무료 다운로드
+  </a>
+  <p style="margin-top:16px; font-size:13px; color:var(--muted);">Windows 전용 · 설치 후 바로 사용 가능</p>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="logo">📄 PDF <span>Vault</span></div>
+  <div class="links">
+    <a href="https://github.com/Jae99-Hub/pdf-vault" target="_blank">GitHub</a>
+    <a href="https://github.com/Jae99-Hub/pdf-vault/releases" target="_blank">릴리즈 노트</a>
+    <a href="https://github.com/Jae99-Hub/pdf-vault/issues" target="_blank">버그 제보</a>
+  </div>
+  <div class="copy">© 2025 PDF Vault. Free & Open Source.</div>
+</footer>
+
+<script>
+  // 최신 버전 GitHub API에서 가져오기
+  fetch('https://api.github.com/repos/Jae99-Hub/pdf-vault/releases/latest')
+    .then(r => r.json())
+    .then(data => {
+      const tag = data.tag_name || 'v2.0.8'
+      document.getElementById('version-tag').textContent = '최신 버전 ' + tag
+      const asset = data.assets?.find(a => a.name.endsWith('.exe'))
+      if (asset) {
+        document.getElementById('download-btn').href = asset.browser_download_url
+      }
+    })
+    .catch(() => {
+      document.getElementById('version-tag').textContent = '최신 버전 v2.0.8'
+    })
+</script>
+
+</body>
+</html>
