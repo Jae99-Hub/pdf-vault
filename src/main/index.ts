@@ -206,6 +206,14 @@ function startVaultWatcher(win: BrowserWindow): void {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
+const SYSTEM_FOLDERS = [
+  { name: 'PDF', type_key: 'pdf' },
+  { name: '이미지', type_key: 'image' },
+  { name: '동영상', type_key: 'video' },
+  { name: '음원', type_key: 'audio' },
+  { name: '문서', type_key: 'doc' },
+]
+
 function initDatabase(): void {
   db = new Database(DB_PATH)
   db.pragma('journal_mode = WAL')
@@ -281,6 +289,19 @@ function initDatabase(): void {
       FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
     );
   `)
+}
+
+function migrateDatabase(): void {
+  try { db.exec('ALTER TABLE folders ADD COLUMN type_key TEXT') } catch {}
+}
+
+function ensureSystemFolders(): void {
+  for (const sf of SYSTEM_FOLDERS) {
+    const existing = db.prepare('SELECT id FROM folders WHERE type_key = ?').get(sf.type_key)
+    if (!existing) {
+      db.prepare('INSERT INTO folders (name, parent_id, type_key) VALUES (?, NULL, ?)').run(sf.name, sf.type_key)
+    }
+  }
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -639,7 +660,7 @@ function registerIpcHandlers(): void {
         console.error('create-folder dir error:', e)
       }
     }
-    return { id: folderId, name, parent_id: parentId ?? null }
+    return { id: folderId, name, parent_id: parentId ?? null, type_key: null }
   })
 
   ipcMain.handle('rename-folder', (_e, folderId: number, name: string) => {
@@ -912,6 +933,8 @@ app.whenReady().then(() => {
 
   settings = loadSettings()
   initDatabase()
+  migrateDatabase()
+  ensureSystemFolders()
   registerIpcHandlers()
   buildMenu()
   createWindow()

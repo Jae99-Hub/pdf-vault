@@ -243,8 +243,7 @@ function App(): React.ReactElement {
         selectedTagIds={selectedTagIds}
         view={view}
         selectedFileType={selectedFileType}
-        onSelectFileType={(t) => { setSelectedFileType(t === selectedFileType ? null : t); setSelectedFolderId(undefined); setSelectedTagIds([]); setView('all') }}
-        onSelectFolder={(id) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all'); setSelectedFileType(null) }}
+        onSelectFolder={(id, typeKey) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all'); setSelectedFileType(typeKey !== undefined ? typeKey : null) }}
         onSelectTag={(id) => {
           setSelectedTagIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
           setSelectedFolderId(undefined)

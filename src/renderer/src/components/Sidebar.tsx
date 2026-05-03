@@ -14,8 +14,7 @@ interface Props {
   selectedTagIds: number[]
   view: 'all' | 'favorites' | 'recent'
   selectedFileType: string | null
-  onSelectFileType: (type: string) => void
-  onSelectFolder: (id: number | undefined) => void
+  onSelectFolder: (id: number | undefined, typeKey?: string | null) => void
   onSelectTag: (id: number) => void
   onSelectView: (v: 'all' | 'favorites' | 'recent') => void
   onCreateFolder: (name: string, parentId?: number) => void
@@ -33,12 +32,12 @@ interface Props {
   onOpenSettings: () => void
 }
 
-const FILE_TYPES = [
-  { key: 'pdf', label: '📄 PDF' },
-  { key: 'image', label: '🖼️ 이미지' },
-  { key: 'video', label: '🎬 동영상' },
-  { key: 'audio', label: '🎵 음원' },
-  { key: 'doc', label: '📝 문서' },
+const SYSTEM_FOLDERS = [
+  { type_key: 'pdf', label: 'PDF', icon: '📄' },
+  { type_key: 'image', label: '이미지', icon: '🖼️' },
+  { type_key: 'video', label: '동영상', icon: '🎬' },
+  { type_key: 'audio', label: '음원', icon: '🎵' },
+  { type_key: 'doc', label: '문서', icon: '📝' },
 ]
 
 const TAG_COLORS = ['#4d94e8', '#1D9E75', '#D85A30', '#7F77DD', '#BA7517']
@@ -48,6 +47,14 @@ function buildTree(folders: Folder[], parentId: number | null = null): FolderNod
     .filter(f => f.parent_id === (parentId ?? null))
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
     .map(f => ({ folder: f, children: buildTree(folders, f.id) }))
+}
+
+function findAncestorTypeKey(folderId: number | null, folders: Folder[]): string | null {
+  if (!folderId) return null
+  const folder = folders.find(f => f.id === folderId)
+  if (!folder) return null
+  if (folder.type_key) return folder.type_key
+  return findAncestorTypeKey(folder.parent_id ?? null, folders)
 }
 
 const sectionLabel: React.CSSProperties = {
@@ -76,7 +83,7 @@ function NavItem({ label, active, onClick, colors }: { label: string; active: bo
 
 export default function Sidebar({
   folders, tags, selectedFolderId, selectedTagIds, view,
-  selectedFileType, onSelectFileType,
+  selectedFileType,
   onSelectFolder, onSelectTag, onSelectView, onCreateFolder, onCreateTag,
   onImport, searchQuery, onSearch, draggingDoc, onDropToFolder,
   onDeleteFolder, onRenameFolder, onDeleteTag, onRenameTag, onDropFileToFolder,
@@ -105,7 +112,7 @@ export default function Sidebar({
   const [renamingFolderText, setRenamingFolderText] = useState('')
   const [renamingTagId, setRenamingTagId] = useState<number | null>(null)
   const [renamingTagText, setRenamingTagText] = useState('')
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'folder' | 'tag'; id: number; name: string } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; type: 'folder' | 'tag'; id: number; name: string; isSystem?: boolean } | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const [addingSubInFolderId, setAddingSubInFolderId] = useState<number | null>(null)
   const [addingSubName, setAddingSubName] = useState('')
@@ -129,9 +136,9 @@ export default function Sidebar({
     setNewTagName(''); setShowTagInput(false)
   }
 
-  function handleContextMenu(e: React.MouseEvent, type: 'folder' | 'tag', id: number, name: string): void {
+  function handleContextMenu(e: React.MouseEvent, type: 'folder' | 'tag', id: number, name: string, isSystem?: boolean): void {
     e.preventDefault(); e.stopPropagation()
-    setContextMenu({ x: e.clientX, y: e.clientY, type, id, name })
+    setContextMenu({ x: e.clientX, y: e.clientY, type, id, name, isSystem })
   }
 
   function getFilesFromDrop(e: React.DragEvent): string[] {
@@ -159,7 +166,10 @@ export default function Sidebar({
       onDropToFolder(folderId)
     } else {
       const files = getFilesFromDrop(e)
-      if (files.length > 0) { onDropFileToFolder(folderId, files); onSelectFolder(folderId) }
+      if (files.length > 0) {
+        onDropFileToFolder(folderId, files)
+        onSelectFolder(folderId, findAncestorTypeKey(folderId, folders))
+      }
     }
   }
 
@@ -181,6 +191,9 @@ export default function Sidebar({
     setAddingSubInFolderId(null); setAddingSubName('')
   }
 
+  // Non-system folders only (for building trees under system folders and orphan list)
+  const nonSystemFolders = folders.filter(f => !f.type_key)
+
   function renderFolderNode(node: FolderNode, depth: number): React.ReactElement {
     const { folder } = node
     const isExpanded = expandedIds.has(folder.id)
@@ -195,7 +208,7 @@ export default function Sidebar({
           onDrop={(e) => handleFolderDrop(e, folder.id)}
           onDragLeave={() => setDragOverFolder(null)}
           onDragEnter={(e) => { e.preventDefault(); e.stopPropagation() }}
-          onClick={() => { if (renamingFolderId !== folder.id) onSelectFolder(folder.id) }}
+          onClick={() => { if (renamingFolderId !== folder.id) onSelectFolder(folder.id, findAncestorTypeKey(folder.id, folders)) }}
           onContextMenu={(e) => handleContextMenu(e, 'folder', folder.id, folder.name)}
           style={{
             display: 'flex', alignItems: 'center',
@@ -213,7 +226,7 @@ export default function Sidebar({
           <span
             onClick={(e) => toggleExpand(folder.id, e)}
             style={{
-              width: 14, flexShrink: 0, fontSize: 9, color: hasChildren ? C.muted : 'transparent',
+              width: 18, flexShrink: 0, fontSize: 13, color: hasChildren ? C.muted : 'transparent',
               textAlign: 'center', marginRight: 3, cursor: hasChildren ? 'pointer' : 'default',
               transition: 'color 0.1s'
             }}
@@ -242,13 +255,7 @@ export default function Sidebar({
         </div>
 
         {isExpanded && (
-          <>
-            {depth > 0 && (
-              <div style={{
-                position: 'absolute', left: 18 + depth * 16,
-                top: 0, bottom: 0, width: 1, background: C.border, pointerEvents: 'none'
-              }} />
-            )}
+          <div style={{ position: 'relative' }}>
             {node.children.map(child => renderFolderNode(child, depth + 1))}
             {addingSubInFolderId === folder.id && (
               <div style={{ paddingLeft: 10 + (depth + 1) * 16, paddingRight: 10, margin: '2px 8px' }}>
@@ -265,13 +272,92 @@ export default function Sidebar({
                 />
               </div>
             )}
-          </>
+          </div>
         )}
       </React.Fragment>
     )
   }
 
-  const tree = buildTree(folders)
+  function renderSystemFolder(sf: typeof SYSTEM_FOLDERS[0]): React.ReactElement | null {
+    const dbFolder = folders.find(f => f.type_key === sf.type_key)
+    if (!dbFolder) return null
+
+    const isExpanded = expandedIds.has(dbFolder.id)
+    const isActive = selectedFileType === sf.type_key && selectedFolderId === undefined
+    const isDrop = dragOverFolder === dbFolder.id
+    const children = buildTree(nonSystemFolders, dbFolder.id)
+    const hasChildren = children.length > 0 || addingSubInFolderId === dbFolder.id
+
+    return (
+      <React.Fragment key={dbFolder.id}>
+        <div
+          onDragOver={(e) => handleFolderDragOver(e, dbFolder.id)}
+          onDrop={(e) => handleFolderDrop(e, dbFolder.id)}
+          onDragLeave={() => setDragOverFolder(null)}
+          onDragEnter={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onClick={() => {
+            if (isActive) {
+              onSelectFolder(undefined, null)
+            } else {
+              onSelectFolder(undefined, sf.type_key)
+            }
+          }}
+          onContextMenu={(e) => handleContextMenu(e, 'folder', dbFolder.id, dbFolder.name, true)}
+          style={{
+            display: 'flex', alignItems: 'center',
+            paddingLeft: 10, paddingRight: 10,
+            paddingTop: 6, paddingBottom: 6,
+            margin: '1px 8px', borderRadius: 6, cursor: 'pointer',
+            fontSize: 12, userSelect: 'none',
+            background: isDrop ? C.dropHover : isActive ? C.active : 'transparent',
+            color: isDrop ? C.dropText : isActive ? '#a0c4ff' : C.text,
+            borderLeft: isActive && !isDrop ? `2px solid ${C.activeBorder}` : '2px solid transparent',
+            outline: isDrop ? `1px dashed ${C.dropText}` : 'none',
+            transition: 'background 0.12s, color 0.12s',
+            fontWeight: isActive ? 500 : 400,
+          }}
+        >
+          <span
+            onClick={(e) => { e.stopPropagation(); toggleExpand(dbFolder.id, e) }}
+            style={{
+              width: 18, flexShrink: 0, fontSize: 13,
+              color: hasChildren ? C.muted : 'transparent',
+              textAlign: 'center', marginRight: 3,
+              cursor: hasChildren ? 'pointer' : 'default',
+              transition: 'color 0.1s'
+            }}
+          >{hasChildren ? (isExpanded ? '▾' : '▸') : ''}</span>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 13 }}>{sf.icon}</span> {sf.label}
+          </span>
+        </div>
+
+        {isExpanded && (
+          <div style={{ position: 'relative' }}>
+            {children.map(child => renderFolderNode(child, 1))}
+            {addingSubInFolderId === dbFolder.id && (
+              <div style={{ paddingLeft: 26, paddingRight: 10, margin: '2px 8px' }}>
+                <input
+                  autoFocus value={addingSubName}
+                  onChange={(e) => setAddingSubName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitSubFolder(dbFolder.id)
+                    if (e.key === 'Escape') { setAddingSubInFolderId(null); setAddingSubName('') }
+                  }}
+                  onBlur={() => commitSubFolder(dbFolder.id)}
+                  placeholder="폴더 이름..."
+                  style={{ width: '100%', padding: '5px 8px', background: '#1e1e28', border: `1px solid ${C.accent}`, borderRadius: 5, color: '#e2e2e8', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </React.Fragment>
+    )
+  }
+
+  // Orphan folders: top-level, non-system
+  const orphanTree = buildTree(nonSystemFolders, null)
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '5px 9px', background: '#1e1e28',
@@ -299,7 +385,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* PDF 추가 버튼 */}
+      {/* 파일 추가 버튼 */}
       <div style={{ padding: '0 10px 10px' }}>
         <button
           onClick={onImport}
@@ -312,45 +398,17 @@ export default function Sidebar({
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {/* 라이브러리 */}
         <div style={sectionLabel}>라이브러리</div>
-        <NavItem label="📚 전체 문서" active={view === 'all' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('all')} colors={C} />
+        <NavItem label="📚 전체 문서" active={view === 'all' && !selectedFolderId && selectedTagIds.length === 0 && !selectedFileType} onClick={() => onSelectView('all')} colors={C} />
         <NavItem label="⭐ 즐겨찾기" active={view === 'favorites' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('favorites')} colors={C} />
         <NavItem label="🕐 최근 열람" active={view === 'recent' && !selectedFolderId && selectedTagIds.length === 0} onClick={() => onSelectView('recent')} colors={C} />
 
         <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
 
-        {/* 유형 */}
+        {/* 유형 폴더 */}
         <div style={sectionLabel}>유형</div>
-        {FILE_TYPES.map(ft => (
-          <NavItem key={ft.key} label={ft.label} active={selectedFileType === ft.key} onClick={() => onSelectFileType(ft.key)} colors={C} />
-        ))}
+        {SYSTEM_FOLDERS.map(sf => renderSystemFolder(sf))}
 
-        <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
-
-        {/* 폴더 */}
-        <div style={{ display: 'flex', alignItems: 'center', paddingRight: 10 }}>
-          <span style={sectionLabel}>폴더</span>
-          <span
-            onClick={() => setShowFolderInput(!showFolderInput)}
-            style={{ cursor: 'pointer', color: C.muted, fontSize: 18, lineHeight: 1, paddingRight: 14, paddingBottom: 2, transition: 'color 0.1s' }}
-            onMouseEnter={e => e.currentTarget.style.color = '#e2e2e8'}
-            onMouseLeave={e => e.currentTarget.style.color = C.muted}
-          >+</span>
-        </div>
-
-        {showFolderInput && (
-          <div style={{ padding: '4px 10px 6px' }} onClick={e => e.stopPropagation()}>
-            <input autoFocus value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreateFolder()
-                if (e.key === 'Escape') { setNewFolderName(''); setShowFolderInput(false) }
-              }}
-              placeholder="폴더 이름..."
-              style={inputStyle}
-            />
-          </div>
-        )}
-
+        {/* 드래그 중 분류없음 드롭존 */}
         {draggingDoc && (
           <div
             onDragOver={handleNoneDragOver} onDrop={handleNoneDrop}
@@ -366,12 +424,37 @@ export default function Sidebar({
           >📂 분류 없음</div>
         )}
 
-        {tree.length === 0 && !showFolderInput && (
-          <div style={{ padding: '6px 14px', fontSize: 11, color: C.muted }}>폴더가 없습니다</div>
+        {/* 기타 폴더 (유형 폴더에 속하지 않는 최상위 폴더) */}
+        {orphanTree.length > 0 && (
+          <>
+            <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
+            <div style={{ display: 'flex', alignItems: 'center', paddingRight: 10 }}>
+              <span style={sectionLabel}>기타 폴더</span>
+              <span
+                onClick={() => setShowFolderInput(!showFolderInput)}
+                style={{ cursor: 'pointer', color: C.muted, fontSize: 18, lineHeight: 1, paddingRight: 14, paddingBottom: 2, transition: 'color 0.1s' }}
+                onMouseEnter={e => e.currentTarget.style.color = '#e2e2e8'}
+                onMouseLeave={e => e.currentTarget.style.color = C.muted}
+              >+</span>
+            </div>
+            {showFolderInput && (
+              <div style={{ padding: '4px 10px 6px' }} onClick={e => e.stopPropagation()}>
+                <input autoFocus value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCreateFolder()
+                    if (e.key === 'Escape') { setNewFolderName(''); setShowFolderInput(false) }
+                  }}
+                  placeholder="폴더 이름..."
+                  style={inputStyle}
+                />
+              </div>
+            )}
+            <div style={{ position: 'relative' }}>
+              {orphanTree.map(node => renderFolderNode(node, 0))}
+            </div>
+          </>
         )}
-        <div style={{ position: 'relative' }}>
-          {tree.map(node => renderFolderNode(node, 0))}
-        </div>
 
         <div style={{ height: 1, background: C.border, margin: '10px 0' }} />
 
@@ -413,41 +496,41 @@ export default function Sidebar({
 
         <div style={{ padding: '2px 8px 12px' }}>
           {tags.length === 0 && <div style={{ padding: '4px 6px', fontSize: 11, color: C.muted }}>태그가 없습니다</div>}
-          {tags.map((t) => {
-            const isActive = selectedTagIds.includes(t.id)
+          {tags.map((tag) => {
+            const isActive = selectedTagIds.includes(tag.id)
             return (
-              <div key={t.id}
-                onClick={() => { if (renamingTagId !== t.id) onSelectTag(t.id) }}
-                onContextMenu={(e) => handleContextMenu(e, 'tag', t.id, t.name)}
+              <div key={tag.id}
+                onClick={() => { if (renamingTagId !== tag.id) onSelectTag(tag.id) }}
+                onContextMenu={(e) => handleContextMenu(e, 'tag', tag.id, tag.name)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 8px', borderRadius: 6, cursor: 'pointer', margin: '1px 0',
-                  background: isActive ? t.color + '22' : 'transparent',
-                  border: isActive ? `1px solid ${t.color}55` : '1px solid transparent',
+                  background: isActive ? tag.color + '22' : 'transparent',
+                  border: isActive ? `1px solid ${tag.color}55` : '1px solid transparent',
                   transition: 'background 0.12s',
                 }}
                 onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = C.hover }}
                 onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
               >
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color, flexShrink: 0, boxShadow: `0 0 4px ${t.color}88` }} />
-                {renamingTagId === t.id ? (
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: tag.color, flexShrink: 0, boxShadow: `0 0 4px ${tag.color}88` }} />
+                {renamingTagId === tag.id ? (
                   <div style={{ display: 'flex', gap: 4, flex: 1 }} onClick={e => e.stopPropagation()}>
                     <input autoFocus value={renamingTagText}
                       onChange={(e) => setRenamingTagText(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') { onRenameTag(t.id, renamingTagText); setRenamingTagId(null) }
+                        if (e.key === 'Enter') { onRenameTag(tag.id, renamingTagText); setRenamingTagId(null) }
                         if (e.key === 'Escape') setRenamingTagId(null)
                       }}
                       onBlur={() => setRenamingTagId(null)}
                       style={{ flex: 1, padding: '2px 6px', background: '#1e1e28', border: `1px solid ${C.accent}`, borderRadius: 4, color: '#e2e2e8', fontSize: 12, outline: 'none' }}
                     />
-                    <span onMouseDown={(e) => { e.preventDefault(); onRenameTag(t.id, renamingTagText); setRenamingTagId(null) }}
+                    <span onMouseDown={(e) => { e.preventDefault(); onRenameTag(tag.id, renamingTagText); setRenamingTagId(null) }}
                       style={{ cursor: 'pointer', color: '#4eca7c', fontSize: 14 }}>✓</span>
                   </div>
                 ) : (
                   <>
-                    <span style={{ fontSize: 12, color: isActive ? t.color : C.text, flex: 1 }}>#{t.name}</span>
-                    {isActive && <span style={{ fontSize: 10, color: t.color, fontWeight: 600 }}>✓</span>}
+                    <span style={{ fontSize: 12, color: isActive ? tag.color : C.text, flex: 1 }}>#{tag.name}</span>
+                    {isActive && <span style={{ fontSize: 10, color: tag.color, fontWeight: 600 }}>✓</span>}
                   </>
                 )}
               </div>
@@ -467,26 +550,33 @@ export default function Sidebar({
 
       {/* 컨텍스트 메뉴 */}
       {contextMenu && (() => {
-        const menuTop = Math.min(contextMenu.y, window.innerHeight - 280)
+        const menuTop = Math.min(contextMenu.y, window.innerHeight - 200)
         const menuLeft = Math.min(contextMenu.x, window.innerWidth - 210)
+        const isSystem = contextMenu.isSystem
+        const items = contextMenu.type === 'folder'
+          ? [
+              ...(!isSystem ? [{ label: '✏️ 이름 수정', action: () => { setRenamingFolderId(contextMenu.id); setRenamingFolderText(contextMenu.name); setContextMenu(null) }, color: '#d0d0da' }] : []),
+              { label: '📁 새 하위 폴더', action: () => { setAddingSubInFolderId(contextMenu.id); setAddingSubName(''); setExpandedIds(prev => new Set([...prev, contextMenu.id])); setContextMenu(null) }, color: '#d0d0da' },
+              ...(!isSystem ? [{ label: '🗑️ 삭제', action: () => { if (confirm(`"${contextMenu.name}" 폴더를 삭제할까요?`)) onDeleteFolder(contextMenu.id); setContextMenu(null) }, color: '#e05555' }] : []),
+            ]
+          : [
+              { label: '✏️ 이름 수정', action: () => { setRenamingTagId(contextMenu.id); setRenamingTagText(contextMenu.name); setContextMenu(null) }, color: '#d0d0da' },
+              { label: '🗑️ 삭제', action: () => { if (confirm(`"${contextMenu.name}" 태그를 삭제할까요?`)) onDeleteTag(contextMenu.id); setContextMenu(null) }, color: '#e05555' },
+            ]
         return (
-        <div
-          style={{ position: 'fixed', top: menuTop, left: menuLeft, background: '#2a2a33', border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 164, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', overflow: 'hidden' }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ padding: '4px 0' }}>
-            {[
-              { label: '✏️ 이름 수정', action: () => { if (contextMenu.type === 'folder') { setRenamingFolderId(contextMenu.id); setRenamingFolderText(contextMenu.name) } else { setRenamingTagId(contextMenu.id); setRenamingTagText(contextMenu.name) } setContextMenu(null) }, color: '#d0d0da' },
-              ...(contextMenu.type === 'folder' ? [{ label: '📁 새 하위 폴더', action: () => { setAddingSubInFolderId(contextMenu.id); setAddingSubName(''); setExpandedIds(prev => new Set([...prev, contextMenu.id])); setContextMenu(null) }, color: '#d0d0da' }] : []),
-              { label: '🗑️ 삭제', action: () => { if (contextMenu.type === 'folder') { if (confirm(`"${contextMenu.name}" 폴더를 삭제할까요?`)) onDeleteFolder(contextMenu.id) } else { if (confirm(`"${contextMenu.name}" 태그를 삭제할까요?`)) onDeleteTag(contextMenu.id) } setContextMenu(null) }, color: '#e05555' },
-            ].map(({ label, action, color }) => (
-              <div key={label} onClick={action} style={{ padding: '8px 14px', fontSize: 12, color, cursor: 'pointer', transition: 'background 0.1s' }}
-                onMouseEnter={e => e.currentTarget.style.background = C.hover}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >{label}</div>
-            ))}
+          <div
+            style={{ position: 'fixed', top: menuTop, left: menuLeft, background: '#2a2a33', border: `1px solid ${C.border}`, borderRadius: 8, zIndex: 9999, minWidth: 164, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', overflow: 'hidden' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: '4px 0' }}>
+              {items.map(({ label, action, color }) => (
+                <div key={label} onClick={action} style={{ padding: '8px 14px', fontSize: 12, color, cursor: 'pointer', transition: 'background 0.1s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.hover}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >{label}</div>
+              ))}
+            </div>
           </div>
-        </div>
         )
       })()}
     </div>

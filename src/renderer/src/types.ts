@@ -2,6 +2,7 @@ export interface Folder {
   id: number
   name: string
   parent_id: number | null
+  type_key?: string | null
   created_at: string
 }
 
