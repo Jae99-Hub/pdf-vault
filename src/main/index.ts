@@ -407,6 +407,116 @@ function migrateDatabase(): void {
   db.prepare('UPDATE folders SET type_key = NULL WHERE type_key IS NOT NULL').run()
 }
 
+// ── DB 파일 이름 마이그레이션 (pdf-vault.db → foldry.db) ─────────────────────
+
+function migrateOldDatabase(): void {
+  const oldDbPath = join(app.getPath('userData'), 'pdf-vault.db')
+  if (!fs.existsSync(DB_PATH) && fs.existsSync(oldDbPath)) {
+    try {
+      fs.copyFileSync(oldDbPath, DB_PATH)
+      // WAL/SHM 파일도 같이 복사
+      const oldWal = oldDbPath + '-wal'
+      const oldShm = oldDbPath + '-shm'
+      if (fs.existsSync(oldWal)) fs.copyFileSync(oldWal, DB_PATH + '-wal')
+      if (fs.existsSync(oldShm)) fs.copyFileSync(oldShm, DB_PATH + '-shm')
+      console.log('DB migrated: pdf-vault.db → foldry.db')
+    } catch (e) {
+      console.error('DB migration error:', e)
+    }
+  }
+}
+
+// ── 앱 시작 시 볼트 폴더와 DB 동기화 ─────────────────────────────────────────
+
+function walkDirs(dir: string): string[] {
+  const results: string[] = []
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const full = join(dir, entry.name)
+        results.push(full)
+        results.push(...walkDirs(full))
+      }
+    }
+  } catch { /* skip */ }
+  return results
+}
+
+function syncVaultOnStartup(win: BrowserWindow): void {
+  if (!settings.vaultPath || !fs.existsSync(settings.vaultPath)) return
+
+  let changed = false
+
+  // 1) 폴더 동기화: 디스크에 있지만 DB에 없는 폴더 추가
+  const diskDirs = walkDirs(settings.vaultPath)
+  for (const dirPath of diskDirs) {
+    const normDir = normalizePath(dirPath)
+    const normVault = normalizePath(settings.vaultPath)
+    const rel = normDir.startsWith(normVault) ? normDir.slice(normVault.length).replace(/^\//, '') : ''
+    if (!rel) continue
+    const parts = rel.split('/').filter(Boolean)
+    let parentId: number | null = null
+    for (const part of parts) {
+      const existing = (parentId === null
+        ? db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id IS NULL').get(part)
+        : db.prepare('SELECT id FROM folders WHERE name = ? AND parent_id = ?').get(part, parentId)
+      ) as { id: number } | undefined
+      if (existing) {
+        parentId = existing.id
+      } else {
+        const info = db.prepare('INSERT INTO folders (name, parent_id) VALUES (?, ?)').run(part, parentId)
+        parentId = info.lastInsertRowid as number
+        changed = true
+      }
+    }
+  }
+
+  // 2) 폴더 동기화: DB에 있지만 디스크에 없는 폴더 제거
+  const allFolders = db.prepare('SELECT id FROM folders').all() as { id: number }[]
+  for (const folder of allFolders) {
+    const rel = getFolderRelPath(folder.id)
+    if (!rel) continue
+    const absPath = join(settings.vaultPath, rel)
+    if (!fs.existsSync(absPath)) {
+      orphanDocsInFolder(folder.id)
+      db.prepare('DELETE FROM folders WHERE id = ?').run(folder.id)
+      changed = true
+    }
+  }
+
+  // 3) 파일 동기화: 디스크에 있지만 DB에 없는 파일 추가
+  const diskFiles = walkVault(settings.vaultPath)
+  for (const filePath of diskFiles) {
+    const existing = db.prepare('SELECT id FROM documents WHERE file_path = ?').get(filePath) as { id: number } | undefined
+    if (!existing) {
+      try {
+        const stat = fs.statSync(filePath)
+        const ext = extname(filePath)
+        const title = basename(filePath, ext)
+        const folderId = getFolderIdFromVaultPath(filePath)
+        db.prepare('INSERT OR IGNORE INTO documents (title, file_path, file_size, folder_id) VALUES (?, ?, ?, ?)').run(title, filePath, stat.size, folderId)
+        changed = true
+      } catch (e) { console.error('startup sync add error:', e) }
+    }
+  }
+
+  // 4) 파일 동기화: DB에 있지만 디스크에 없는 파일 제거
+  const diskSet = new Set(diskFiles.map(normalizePath))
+  const allDocs = db.prepare('SELECT id, file_path FROM documents').all() as { id: number; file_path: string }[]
+  for (const doc of allDocs) {
+    // 볼트 경로 밖의 파일은 건드리지 않음
+    if (!normalizePath(doc.file_path).startsWith(normalizePath(settings.vaultPath))) continue
+    if (!diskSet.has(normalizePath(doc.file_path))) {
+      db.prepare('DELETE FROM documents WHERE id = ?').run(doc.id)
+      changed = true
+    }
+  }
+
+  if (changed) {
+    win.webContents.send('vault-file-changed')
+  }
+}
+
 // ── Window ────────────────────────────────────────────────────────────────────
 
 function createWindow(): void {
@@ -427,6 +537,7 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
     setupAutoUpdater(mainWindow)
+    syncVaultOnStartup(mainWindow)
     startVaultWatcher(mainWindow)
   })
 
@@ -1134,6 +1245,7 @@ app.whenReady().then(() => {
   })
 
   settings = loadSettings()
+  migrateOldDatabase()
   initDatabase()
   migrateDatabase()
   registerIpcHandlers()
