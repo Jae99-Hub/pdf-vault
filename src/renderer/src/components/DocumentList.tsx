@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Document, Folder, Tag } from '../types'
 import { useTheme } from '../ThemeContext'
 
@@ -16,7 +16,10 @@ interface Props {
   folders: Folder[]
   tags: Tag[]
   selectedDoc: Document | null
-  selectedFileType: string | null
+  sortBy: 'opened' | 'title' | 'created' | 'size' | 'pages'
+  hasMore: boolean
+  onSortChange: (s: 'opened' | 'title' | 'created' | 'size' | 'pages') => void
+  onLoadMore: () => Promise<void>
   onSelectDoc: (doc: Document) => void
   onToggleFavorite: (doc: Document) => void
   onMoveDocument: (doc: Document, folderId: number | null) => void
@@ -27,19 +30,6 @@ interface Props {
   onBulkMove: (docs: Document[], folderId: number | null) => void
 }
 
-const FILE_TYPE_PATTERNS: Record<string, RegExp> = {
-  pdf: /\.pdf$/i,
-  image: /\.(jpg|jpeg|png|gif|bmp|webp)$/i,
-  video: /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i,
-  audio: /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i,
-  doc: /\.(txt|md|docx|hwp)$/i,
-}
-
-const TYPE_ICONS: Record<string, string> = {
-  pdf: '📄', image: '🖼️', video: '🎬', audio: '🎵', doc: '📝',
-}
-const SYSTEM_TYPE_ORDER = ['pdf', 'image', 'video', 'audio', 'doc']
-
 
 interface MoveItem { id: number | null; icon: string; name: string; indent: number }
 
@@ -48,22 +38,15 @@ function buildMoveItems(folders: Folder[]): MoveItem[] {
 
   function addChildren(parentId: number, indent: number): void {
     folders
-      .filter(f => f.parent_id === parentId && !f.type_key)
+      .filter(f => f.parent_id === parentId)
       .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
       .forEach(f => { items.push({ id: f.id, icon: '📁', name: f.name, indent }); addChildren(f.id, indent + 1) })
   }
 
-  for (const key of SYSTEM_TYPE_ORDER) {
-    const sf = folders.find(f => f.type_key === key)
-    if (!sf) continue
-    items.push({ id: sf.id, icon: TYPE_ICONS[key], name: sf.name, indent: 0 })
-    addChildren(sf.id, 1)
-  }
-
-  // 기타 폴더 (최상위, 유형 없음)
-  const orphans = folders.filter(f => !f.type_key && f.parent_id === null)
+  folders
+    .filter(f => f.parent_id === null)
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  orphans.forEach(f => { items.push({ id: f.id, icon: '📁', name: f.name, indent: 0 }); addChildren(f.id, 1) })
+    .forEach(f => { items.push({ id: f.id, icon: '📁', name: f.name, indent: 0 }); addChildren(f.id, 1) })
 
   return items
 }
@@ -99,14 +82,17 @@ function getFolderName(doc: Document, folders: Folder[]): string | null {
   return folders.find(f => f.id === doc.folder_id)?.name ?? null
 }
 
+const ITEM_HEIGHT = 60
+const OVERSCAN = 6
+
 export default function DocumentList({
-  documents, folders, tags, selectedDoc, selectedFileType,
+  documents, folders, tags, selectedDoc,
+  sortBy, hasMore, onSortChange, onLoadMore,
   onSelectDoc, onToggleFavorite, onMoveDocument,
   onDragStart, onDeleteDocument, onRenameDocument,
   onBulkDelete, onBulkMove
 }: Props): React.ReactElement {
   const C = useTheme()
-  const [sortBy, setSortBy] = useState<'opened' | 'title' | 'created' | 'size' | 'pages'>('opened')
   const [selectedDocTags, setSelectedDocTags] = useState<Tag[]>([])
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; doc: Document } | null>(null)
   const [draggingDoc, setDraggingDoc] = useState<Document | null>(null)
@@ -117,6 +103,30 @@ export default function DocumentList({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
   const [showBulkMoveMenu, setShowBulkMoveMenu] = useState(false)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [containerHeight, setContainerHeight] = useState(600)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const loadingMoreRef = useRef(false)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setContainerHeight(el.clientHeight))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    setScrollTop(el.scrollTop)
+    if (hasMore && !loadingMoreRef.current) {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200
+      if (nearBottom) {
+        loadingMoreRef.current = true
+        onLoadMore().finally(() => { loadingMoreRef.current = false })
+      }
+    }
+  }, [hasMore, onLoadMore])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -204,20 +214,15 @@ export default function DocumentList({
     setSelectedIds(new Set()); setSelectMode(false); setShowBulkMoveMenu(false)
   }
 
-  const filteredDocuments = selectedFileType && FILE_TYPE_PATTERNS[selectedFileType]
-    ? documents.filter(d => FILE_TYPE_PATTERNS[selectedFileType!].test(d.file_path))
-    : documents
+  // 정렬/필터는 DB에서 처리되어 오므로 그대로 사용
+  const displayDocs = documents
 
-  function sortedDocs(): Document[] {
-    const arr = [...filteredDocuments]
-    switch (sortBy) {
-      case 'title': return arr.sort((a, b) => a.title.localeCompare(b.title, 'ko'))
-      case 'created': return arr.sort((a, b) => b.created_at.localeCompare(a.created_at))
-      case 'size': return arr.sort((a, b) => b.file_size - a.file_size)
-      case 'pages': return arr.sort((a, b) => b.page_count - a.page_count)
-      default: return arr
-    }
-  }
+  // 가상 스크롤 계산
+  const totalHeight = displayDocs.length * ITEM_HEIGHT
+  const startIdx = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN)
+  const endIdx = Math.min(displayDocs.length, Math.ceil((scrollTop + containerHeight) / ITEM_HEIGHT) + OVERSCAN)
+  const visibleDocs = displayDocs.slice(startIdx, endIdx)
+  const offsetY = startIdx * ITEM_HEIGHT
 
   const menuItemStyle: React.CSSProperties = { padding: '8px 14px', fontSize: 12, cursor: 'pointer', transition: 'background 0.1s' }
 
@@ -228,10 +233,10 @@ export default function DocumentList({
     >
       {/* 헤더 */}
       <div style={{ padding: '10px 12px 8px', borderBottom: `1px solid ${C.border}`, background: C.surface, display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-        <span style={{ fontSize: 11, color: C.muted, flex: 1, fontWeight: 500 }}>문서 <span style={{ color: C.accent }}>{filteredDocuments.length}</span>개</span>
+        <span style={{ fontSize: 11, color: C.muted, flex: 1, fontWeight: 500 }}>문서 <span style={{ color: C.accent }}>{displayDocs.length}</span>{hasMore ? '+' : ''}개</span>
         <select
           value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          onChange={(e) => onSortChange(e.target.value as typeof sortBy)}
           onClick={(e) => e.stopPropagation()}
           style={{ fontSize: 10, background: C.inputBg, border: `1px solid ${C.border}`, borderRadius: 5, color: C.textMuted, padding: '3px 5px', cursor: 'pointer', outline: 'none' }}
         >
@@ -256,13 +261,13 @@ export default function DocumentList({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              const allIds = new Set(filteredDocuments.map(d => d.id))
-              const allSelected = filteredDocuments.every(d => selectedIds.has(d.id))
+              const allIds = new Set(displayDocs.map(d => d.id))
+              const allSelected = displayDocs.every(d => selectedIds.has(d.id))
               setSelectedIds(allSelected ? new Set() : allIds)
             }}
-            style={{ padding: '3px 9px', fontSize: 10, background: filteredDocuments.every(d => selectedIds.has(d.id)) ? C.active : 'transparent', border: `1px solid ${C.accent}`, borderRadius: 5, color: C.accent, cursor: 'pointer', transition: 'all 0.12s' }}
+            style={{ padding: '3px 9px', fontSize: 10, background: displayDocs.every(d => selectedIds.has(d.id)) ? C.active : 'transparent', border: `1px solid ${C.accent}`, borderRadius: 5, color: C.accent, cursor: 'pointer', transition: 'all 0.12s' }}
           >
-            {filteredDocuments.every(d => selectedIds.has(d.id)) ? '전체 해제' : '전체 선택'}
+            {displayDocs.every(d => selectedIds.has(d.id)) ? '전체 해제' : '전체 선택'}
           </button>
 
       {selectedIds.size > 0 && (<>
@@ -290,16 +295,18 @@ export default function DocumentList({
         </div>
       )}
 
-      {/* 문서 목록 */}
-      <div style={{ overflowY: 'auto', flex: 1 }}>
-        {filteredDocuments.length === 0 && (
+      {/* 문서 목록 (가상 스크롤) */}
+      <div ref={scrollRef} style={{ overflowY: 'auto', flex: 1 }} onScroll={handleScroll}>
+        {displayDocs.length === 0 && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted }}>
             <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.4 }}>📄</div>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>문서가 없습니다</div>
             <div style={{ fontSize: 11, opacity: 0.7 }}>파일을 드래그하거나 추가 버튼을 눌러주세요</div>
           </div>
         )}
-        {sortedDocs().map((doc) => {
+        <div style={{ height: totalHeight, position: 'relative' }}>
+        <div style={{ position: 'absolute', top: offsetY, left: 0, right: 0 }}>
+        {visibleDocs.map((doc) => {
           const isSelected = selectedIds.has(doc.id)
           const isActive = selectedDoc?.id === doc.id
           const folderName = getFolderName(doc, folders)
@@ -348,9 +355,11 @@ export default function DocumentList({
                   <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>
                     {/\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v)$/i.test(doc.file_path) ? '🎬'
                       : /\.(mp3|wav|aiff|alac|flac|m4a|ogg|aac)$/i.test(doc.file_path) ? '🎵'
-                      : /\.(txt|md)$/i.test(doc.file_path) ? '📝'
-                      : /\.(docx|hwp)$/i.test(doc.file_path) ? '📃'
                       : /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(doc.file_path) ? '🖼️'
+                      : /\.(xlsx|xls|csv|ods|numbers)$/i.test(doc.file_path) ? '📊'
+                      : /\.(pptx|ppt|odp|key)$/i.test(doc.file_path) ? '📽️'
+                      : /\.(docx|hwp|odt|pages)$/i.test(doc.file_path) ? '📝'
+                      : /\.(txt|md)$/i.test(doc.file_path) ? '🗒️'
                       : '📄'}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -379,6 +388,8 @@ export default function DocumentList({
             </div>
           )
         })}
+        </div>
+        </div>
       </div>
 
       {/* 문서 정보 패널 */}
@@ -425,6 +436,11 @@ export default function DocumentList({
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               >{label}</div>
             ))}
+            <div onClick={() => handleDelete(contextMenu.doc)}
+              style={{ ...menuItemStyle, color: C.danger }}
+              onMouseEnter={e => e.currentTarget.style.background = C.dangerBg}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >🗑️ 삭제</div>
             <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0', padding: '4px 14px 2px', fontSize: 10, color: C.textDim, fontWeight: 500 }}>폴더로 이동</div>
             {buildMoveItems(folders).map(item => (
               <div key={item.id ?? 'none'} onClick={() => { onMoveDocument(contextMenu.doc, item.id); setContextMenu(null) }}
@@ -433,13 +449,6 @@ export default function DocumentList({
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               >{item.icon} {item.name}</div>
             ))}
-            <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 4 }}>
-              <div onClick={() => handleDelete(contextMenu.doc)}
-                style={{ ...menuItemStyle, color: C.danger }}
-                onMouseEnter={e => e.currentTarget.style.background = C.dangerBg}
-                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >🗑️ 삭제</div>
-            </div>
           </div>
         </div>
         )

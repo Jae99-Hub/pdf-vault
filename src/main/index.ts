@@ -69,7 +69,7 @@ function isAudioFile(p: string): boolean {
 }
 
 function isTextDocFile(p: string): boolean {
-  return /\.(txt|md|docx|hwp)$/i.test(p)
+  return /\.(txt|md|docx|hwp|xlsx|xls|pptx|ppt|pages|numbers|key|csv|odt|ods|odp)$/i.test(p)
 }
 
 function isSupportedFile(p: string): boolean {

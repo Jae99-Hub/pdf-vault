@@ -8,7 +8,7 @@ import { useTheme } from './ThemeContext'
 import './assets/main.css'
 
 function isSupportedFile(name: string): boolean {
-  return /\.(pdf|jpg|jpeg|png|gif|bmp|webp|mp4|mkv|avi|mov|wmv|flv|webm|m4v|mp3|wav|aiff|alac|flac|m4a|ogg|aac|txt|md|docx|hwp)$/i.test(name)
+  return /\.(pdf|jpg|jpeg|png|gif|bmp|webp|mp4|mkv|avi|mov|wmv|flv|webm|m4v|mp3|wav|aiff|alac|flac|m4a|ogg|aac|txt|md|docx|hwp|xlsx|xls|pptx|ppt|pages|numbers|key|csv|odt|ods|odp)$/i.test(name)
 }
 
 function App(): React.ReactElement {
@@ -27,8 +27,12 @@ function App(): React.ReactElement {
   const [isDroppingFile, setIsDroppingFile] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [isFirstTime, setIsFirstTime] = useState(false)
-  const [selectedFileType, setSelectedFileType] = useState<string | null>(null)
+  const [importStatus, setImportStatus] = useState<{ filename: string; current: number; total: number } | null>(null)
+  const [sortBy, setSortBy] = useState<'opened' | 'title' | 'created' | 'size' | 'pages'>('opened')
+  const [hasMore, setHasMore] = useState(false)
   const dragCountRef = useRef(0)
+  const handleImportRef = useRef<() => void>(() => {})
+  const PAGE_SIZE = 200
 
   const reload = useCallback(() => setReloadTrigger(t => t + 1), [])
 
@@ -39,10 +43,20 @@ function App(): React.ReactElement {
       if (!p) { setIsFirstTime(true); setShowSettings(true) }
     })
     window.api.onMenuAction((action) => {
-      if (action === 'import') handleImport()
+      if (action === 'import') handleImportRef.current()
       if (action === 'settings') { setIsFirstTime(false); setShowSettings(true) }
     })
-    window.api.onVaultChanged(() => reload())
+    window.api.onVaultChanged(() => {
+      reload()
+      window.api.getFolders().then(setFolders)
+    })
+    window.api.onImportProgress((status) => {
+      if (status.type === 'copying') {
+        setImportStatus({ filename: status.filename ?? '', current: status.current ?? 1, total: status.total ?? 1 })
+      } else {
+        setImportStatus(null)
+      }
+    })
   }, [])
 
   useEffect(() => {
@@ -61,34 +75,37 @@ function App(): React.ReactElement {
   }, [])
 
   useEffect(() => {
+    if (searchQuery.trim()) return  // 검색 중엔 결과 덮어쓰지 않음
     async function load(): Promise<void> {
       if (selectedTagIds.length > 0) {
         const data = await window.api.getDocumentsByTags(selectedTagIds)
         setDocuments(data)
+        setHasMore(false)
         return
       }
-      const data = await window.api.getDocuments(selectedFolderId)
-      if (view === 'favorites') {
-        setDocuments(data.filter((d) => d.is_favorite === 1))
-      } else if (view === 'recent') {
-        const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
-        setDocuments(data.filter(d => d.opened_at && new Date(d.opened_at) > cutoff))
-      } else {
-        setDocuments(data)
-      }
+      const data = await window.api.getDocuments(selectedFolderId, {
+        sortBy, view, limit: PAGE_SIZE, offset: 0
+      })
+      setDocuments(data)
+      setHasMore(data.length === PAGE_SIZE)
     }
     load()
-  }, [selectedFolderId, selectedTagIds, view, reloadTrigger])
+  }, [selectedFolderId, selectedTagIds, view, reloadTrigger, sortBy, searchQuery])
+
+  async function handleLoadMore(): Promise<void> {
+    if (!hasMore) return
+    const data = await window.api.getDocuments(selectedFolderId, {
+      sortBy, view, limit: PAGE_SIZE, offset: documents.length
+    })
+    setDocuments(prev => [...prev, ...data])
+    setHasMore(data.length === PAGE_SIZE)
+  }
 
   async function handleImport(): Promise<void> {
-    let targetFolderId: number | null = selectedFolderId ?? null
-    if (!targetFolderId && selectedFileType) {
-      const sf = folders.find(f => f.type_key === selectedFileType)
-      if (sf) targetFolderId = sf.id
-    }
-    await window.api.importPdf(targetFolderId)
+    await window.api.importPdf(selectedFolderId ?? null)
     reload()
   }
+  handleImportRef.current = handleImport
 
   async function handleSearch(q: string): Promise<void> {
     setSearchQuery(q)
@@ -162,6 +179,11 @@ function App(): React.ReactElement {
       await window.api.moveDocument(doc.id, folderId)
     }
     reload()
+  }
+
+  async function handleMoveFolder(folderId: number, newParentId: number | null): Promise<void> {
+    await window.api.moveFolder(folderId, newParentId)
+    window.api.getFolders().then(setFolders)
   }
 
   async function handleDeleteFolder(folderId: number): Promise<void> {
@@ -251,15 +273,14 @@ function App(): React.ReactElement {
         selectedFolderId={selectedFolderId}
         selectedTagIds={selectedTagIds}
         view={view}
-        selectedFileType={selectedFileType}
-        onSelectFolder={(id, typeKey) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all'); setSelectedFileType(typeKey !== undefined ? typeKey : null) }}
+        onSelectFolder={(id) => { setSelectedFolderId(id); setSelectedTagIds([]); setView('all'); setSearchQuery('') }}
         onSelectTag={(id) => {
           setSelectedTagIds(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
           setSelectedFolderId(undefined)
           setView('all')
-          setSelectedFileType(null)
+          setSearchQuery('')
         }}
-        onSelectView={(v) => { setView(v); setSelectedFolderId(undefined); setSelectedTagIds([]); setSelectedFileType(null) }}
+        onSelectView={(v) => { setView(v); setSelectedFolderId(undefined); setSelectedTagIds([]); setSearchQuery('') }}
         onCreateFolder={handleCreateFolder}
         onCreateTag={handleCreateTag}
         onImport={handleImport}
@@ -267,6 +288,7 @@ function App(): React.ReactElement {
         onSearch={handleSearch}
         draggingDoc={draggingDoc}
         onDropToFolder={handleDropToFolder}
+        onMoveFolder={handleMoveFolder}
         onDeleteFolder={handleDeleteFolder}
         onRenameFolder={handleRenameFolder}
         onDeleteTag={handleDeleteTag}
@@ -282,7 +304,10 @@ function App(): React.ReactElement {
         folders={folders}
         tags={tags}
         selectedDoc={selectedDoc}
-        selectedFileType={selectedFileType}
+        sortBy={sortBy}
+        hasMore={hasMore}
+        onSortChange={setSortBy}
+        onLoadMore={handleLoadMore}
         onSelectDoc={handleSelectDoc}
         onToggleFavorite={handleToggleFavorite}
         onMoveDocument={handleMoveDocument}
@@ -299,6 +324,29 @@ function App(): React.ReactElement {
           isFirstTime={isFirstTime}
           onClose={() => { setShowSettings(false); setIsFirstTime(false) }}
         />
+      )}
+
+      {importStatus && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 99998,
+          background: C.surface, border: `1px solid ${C.border}`,
+          borderRadius: 10, padding: '14px 20px', minWidth: 260,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+        }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 6 }}>
+            파일 가져오는 중 ({importStatus.current}/{importStatus.total})
+          </div>
+          <div style={{ fontSize: 12, color: C.text, marginBottom: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>
+            {importStatus.filename}
+          </div>
+          <div style={{ height: 4, background: C.accentDim, borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 2, background: C.accent,
+              width: `${Math.round((importStatus.current / importStatus.total) * 100)}%`,
+              transition: 'width 0.3s'
+            }} />
+          </div>
+        </div>
       )}
 
       {isDroppingFile && (
