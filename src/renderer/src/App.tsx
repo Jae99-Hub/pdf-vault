@@ -242,16 +242,22 @@ function App(): React.ReactElement {
     dragCountRef.current = 0
     setIsDroppingFile(false)
     const files: string[] = []
+    const folders: string[] = []
     for (let i = 0; i < e.dataTransfer.files.length; i++) {
       const f = e.dataTransfer.files[i]
-      if (isSupportedFile(f.name)) {
-        const filePath = window.api.getPathForFile(f)
-        if (filePath) files.push(filePath)
+      const filePath = window.api.getPathForFile(f)
+      if (!filePath) continue
+      if (f.type === '' && f.size === 0) {
+        folders.push(filePath)
+      } else if (isSupportedFile(f.name)) {
+        files.push(filePath)
       }
     }
-    if (files.length === 0) return
-    await window.api.importPdfPaths(files, selectedFolderId ?? null)
+    if (files.length === 0 && folders.length === 0) return
+    if (files.length > 0) await window.api.importPdfPaths(files, selectedFolderId ?? null)
+    if (folders.length > 0) await window.api.importFolderPaths(folders, selectedFolderId ?? null)
     reload()
+    window.api.getFolders().then(setFolders)
   }
 
   return (

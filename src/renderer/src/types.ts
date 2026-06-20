@@ -87,6 +87,7 @@ export interface ApiType {
   deleteFolder: (folderId: number) => Promise<void>
 renameFolder: (folderId: number, name: string) => Promise<void>
 importPdfPaths: (filePaths: string[], folderId?: number | null) => Promise<object[]>
+importFolderPaths: (folderPaths: string[], parentFolderId?: number | null) => Promise<void>
 deleteTag: (tagId: number) => Promise<void>
 renameTag: (tagId: number, name: string) => Promise<void>
 getPathForFile: (file: File) => string

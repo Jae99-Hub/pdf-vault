@@ -49,6 +49,7 @@ renameFolder: (folderId: number, name: string) => ipcRenderer.invoke('rename-fol
 deleteTag: (tagId: number) => ipcRenderer.invoke('delete-tag', tagId),
 renameTag: (tagId: number, name: string) => ipcRenderer.invoke('rename-tag', tagId, name),
 importPdfPaths: (filePaths: string[], folderId?: number | null) => ipcRenderer.invoke('import-pdf-paths', filePaths, folderId),
+importFolderPaths: (folderPaths: string[], parentFolderId?: number | null) => ipcRenderer.invoke('import-folder-paths', folderPaths, parentFolderId),
 getDocumentsByTags: (tagIds: number[]) => ipcRenderer.invoke('get-documents-by-tags', tagIds),
 getTextHighlights: (documentId: number) => ipcRenderer.invoke('get-text-highlights', documentId),
 addTextHighlight: (documentId: number, page: number, rects: string, selectedText: string, color: string) => ipcRenderer.invoke('add-text-highlight', documentId, page, rects, selectedText, color),

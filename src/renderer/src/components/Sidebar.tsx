@@ -144,16 +144,20 @@ export default function Sidebar({
     setContextMenu({ x: e.clientX, y: e.clientY, type, id, name, isSystem })
   }
 
-  function getFilesFromDrop(e: React.DragEvent): string[] {
+  function getFilesFromDrop(e: React.DragEvent): { files: string[]; folders: string[] } {
     const files: string[] = []
+    const folders: string[] = []
     for (let i = 0; i < e.dataTransfer.files.length; i++) {
       const f = e.dataTransfer.files[i]
-      if (/\.(pdf|jpg|jpeg|png|gif|bmp|webp|mp4|mkv|avi|mov|wmv|flv|webm|m4v|mp3|wav|aiff|alac|flac|m4a|ogg|aac|txt|md|docx|hwp)$/i.test(f.name)) {
-        const path = window.api.getPathForFile(f)
-        if (path) files.push(path)
+      const path = window.api.getPathForFile(f)
+      if (!path) continue
+      if (f.type === '' && f.size === 0) {
+        folders.push(path)
+      } else if (/\.(pdf|jpg|jpeg|png|gif|bmp|webp|mp4|mkv|avi|mov|wmv|flv|webm|m4v|mp3|wav|aiff|alac|flac|m4a|ogg|aac|txt|md|docx|hwp|xlsx|xls|pptx|ppt|pages|numbers|key|csv|odt|ods|odp)$/i.test(f.name)) {
+        files.push(path)
       }
     }
-    return files
+    return { files, folders }
   }
 
   function handleFolderDragOver(e: React.DragEvent, folderId: number): void {
@@ -173,11 +177,10 @@ export default function Sidebar({
     } else if (draggingDoc) {
       onDropToFolder(folderId)
     } else {
-      const files = getFilesFromDrop(e)
-      if (files.length > 0) {
-        onDropFileToFolder(folderId, files)
-        onSelectFolder(folderId)
-      }
+      const { files, folders } = getFilesFromDrop(e)
+      if (files.length > 0) onDropFileToFolder(folderId, files)
+      if (folders.length > 0) window.api.importFolderPaths(folders, folderId)
+      if (files.length > 0 || folders.length > 0) onSelectFolder(folderId)
     }
   }
 
@@ -202,7 +205,11 @@ export default function Sidebar({
     e.preventDefault(); e.stopPropagation()
     setDragOverFolder(null)
     if (draggingDoc) { onDropToFolder(null) }
-    else { const files = getFilesFromDrop(e); if (files.length > 0) onDropFileToFolder(null, files) }
+    else {
+      const { files, folders } = getFilesFromDrop(e)
+      if (files.length > 0) onDropFileToFolder(null, files)
+      if (folders.length > 0) window.api.importFolderPaths(folders, null)
+    }
   }
 
   function commitSubFolder(parentId: number): void {

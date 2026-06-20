@@ -667,12 +667,14 @@ function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
-        { name: '모든 지원 파일', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mp3', 'wav', 'aiff', 'alac', 'flac', 'm4a', 'ogg', 'aac', 'txt', 'md', 'docx', 'hwp'] },
+        { name: '모든 지원 파일', extensions: ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mp3', 'wav', 'aiff', 'alac', 'flac', 'm4a', 'ogg', 'aac', 'txt', 'md', 'docx', 'hwp', 'xlsx', 'xls', 'pptx', 'ppt', 'pages', 'numbers', 'key', 'csv', 'odt', 'ods', 'odp'] },
         { name: 'PDF', extensions: ['pdf'] },
         { name: '이미지', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
         { name: '동영상', extensions: ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v'] },
         { name: '음원', extensions: ['mp3', 'wav', 'aiff', 'alac', 'flac', 'm4a', 'ogg', 'aac'] },
-        { name: '문서', extensions: ['txt', 'md', 'docx', 'hwp'] },
+        { name: '문서', extensions: ['txt', 'md', 'docx', 'hwp', 'pages', 'odt'] },
+        { name: '스프레드시트', extensions: ['xlsx', 'xls', 'csv', 'numbers', 'ods'] },
+        { name: '프레젠테이션', extensions: ['pptx', 'ppt', 'key', 'odp'] },
       ]
     })
     if (result.canceled) return []
@@ -685,6 +687,40 @@ function registerIpcHandlers(): void {
   ipcMain.handle('import-pdf-paths', async (_e, filePaths: string[], folderId?: number | null) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     return importFiles(filePaths, folderId ?? null, win)
+  })
+
+  // ── Import folders (drag-drop directories) ────────────────────────────────
+
+  ipcMain.handle('import-folder-paths', async (_e, folderPaths: string[], parentFolderId?: number | null) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+
+    async function importDir(dirPath: string, parentId: number | null): Promise<void> {
+      const dirName = basename(dirPath)
+      const stmt = db.prepare('INSERT INTO folders (name, parent_id) VALUES (?, ?)')
+      const info = stmt.run(dirName, parentId)
+      const folderId = info.lastInsertRowid as number
+      if (settings.vaultPath) {
+        try { ensureVaultDir(folderId) } catch (_) { /* ignore */ }
+      }
+
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+      const files: string[] = []
+      const subdirs: string[] = []
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue
+        const fullPath = join(dirPath, entry.name)
+        if (entry.isDirectory()) subdirs.push(fullPath)
+        else if (isSupportedFile(fullPath)) files.push(fullPath)
+      }
+
+      if (files.length > 0) await importFiles(files, folderId, win)
+      for (const sub of subdirs) await importDir(sub, folderId)
+    }
+
+    for (const fp of folderPaths) {
+      try { await importDir(fp, parentFolderId ?? null) } catch (e) { console.error('import-folder error:', e) }
+    }
+    win?.webContents.send('vault-file-changed')
   })
 
   // ── Documents ───────────────────────────────────────────────────────────────
